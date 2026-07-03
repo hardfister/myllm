@@ -1,96 +1,165 @@
-# MyLLM - 智能大模型管理平台
+# MyLLM — 大模型对话配置管理平台
 
-> 文档生成时间: 2026-07-03T00:00:00Z | 自动生成
+> 最后更新: 2026-07-04
 
-一个基于 Spring Boot + Vue 3 的 LLM 应用管理平台，支持多模型切换、RAG 知识库管理、角色人设配置等功能。
+全栈 LLM 对话应用，基于 **Spring Boot 4.1 + Vue 3 + MySQL**。支持多模型预设切换、知识库管理、记忆策略配置、JWT 用户认证、离线本地存储与数据云端同步。
+
+---
+
+## 目录
+
+- [项目概述](#项目概述)
+- [技术栈](#技术栈)
+- [项目结构](#项目结构)
+- [快速开始](#快速开始)
+- [API 接口文档](#api-接口文档)
+- [数据库设计](#数据库设计)
+- [功能特性](#功能特性)
+- [用户认证系统](#用户认证系统)
+- [离线 / 本地模式](#离线--本地模式)
+- [配置说明](#配置说明)
+- [更新日志](#更新日志)
+- [测试](#测试)
+- [License](#license)
+
+---
 
 ## 项目概述
 
-MyLLM 是一个全栈大模型应用平台，提供：
-- 多模型支持（DeepSeek、GPT-4o、Claude、Gemini、Llama、Mistral、Qwen 等）
-- RAG 知识库管理与检索
-- 角色人设（Character Persona）配置
-- 毛玻璃（Glassmorphism）现代 UI 设计
-- 主题色自定义
+MyLLM 提供从模型配置到对话的完整链路：
+
+| 功能模块 | 说明 |
+|---------|------|
+| **模型预设管理** | 创建多个模型配置（模型名称 / 提供商 / API Key / Base URL / System Prompt），一键激活切换 |
+| **知识库管理** | 拖拽 / 选择文件上传，关联 Chroma 向量集合，显示切片状态 |
+| **记忆策略配置** | 三种策略（滑动窗口 / 摘要压缩 / 混合）、RAG 开关、长期记忆开关 |
+| **用户认证** | JWT 登录 / 注册、BCrypt 密码加密、Spring Security 权限控制 |
+| **离线 / 本地模式** | 未登录或断网时数据存 localStorage；登录后一键导入云端；JSON 导出 / 导入备份 |
+| **主题定制** | 8 种预设色 + HEX 自定义，全局 CSS 变量实时生效 |
+| **毛玻璃 UI** | backdrop-filter 半透明玻璃态卡片 + 可折叠侧边栏 |
+
+---
 
 ## 技术栈
 
-### 后端 (myllm/)
-| 技术 | 版本 | 说明 |
-|------|------|------|
-| Spring Boot | 4.1.0 | Web 框架 |
-| Java | 21 | 运行时 |
-| Spring AI | 2.0.0 | AI 模型集成 |
-| Spring Data JPA | - | ORM 框架 |
-| MySQL | 8.0+ | 关系型数据库 |
-| Chroma | - | 向量数据库（RAG） |
-| Lombok | - | 代码简化 |
+### 后端 (`myllm/`)
 
-### 前端 (vue/myllm-ui/)
-| 技术 | 版本 | 说明 |
+| 技术 | 版本 | 用途 |
 |------|------|------|
-| Vue | 3.5.38 | UI 框架 |
-| TypeScript | 6.0 | 类型系统 |
+| Spring Boot | 4.1.0 | 应用框架 |
+| Java | 21 | 运行环境 |
+| Spring Security | 4.1.0 | 认证与授权 (JWT + BCrypt) |
+| Spring Data JPA | 4.1.0 | ORM (Hibernate) |
+| Spring AI | 2.0.0 | ChatClient, ChatModel (OpenAI/Ollama) |
+| LangChain4j | 0.33.0 | OpenAI ChatModel (备选) |
+| JJWT | 0.12.6 | JWT 生成与验证 |
+| MySQL Connector | - | MySQL 8.0+ 驱动 |
+| Lombok | - | 样板代码简化 |
+
+### 前端 (`vue/myllm-ui/`)
+
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Vue | 3.5.38 | UI 框架 (Composition API, `<script setup>`) |
+| TypeScript | ~6.0 | 类型系统 |
 | Vite | 8.0.16 | 构建工具 |
-| Vue Router | 5.1.0 | 路由管理 |
-| Axios | 1.18.1 | HTTP 客户端 |
-| Lucide Icons | 0.577.0 | 图标库 |
+| Vue Router | 5.1.0 | 路由 (单页 Layout) |
+| Axios | 1.18.1 | HTTP 客户端 + JWT 拦截器 |
+
+---
 
 ## 项目结构
 
 ```
-myllm/
-├── myllm/                          # 后端项目
+.
+├── myllm/                                   # 后端 (Spring Boot)
 │   ├── src/main/java/com/example/myllm/
 │   │   ├── config/
-│   │   │   └── AiConfig.java       # AI 模型配置 (ChatClient Bean)
+│   │   │   ├── AiConfig.java                # ChatClient Bean
+│   │   │   ├── SecurityConfig.java          # Spring Security + CORS 配置
+│   │   │   └── JwtAuthFilter.java           # JWT 认证过滤器
 │   │   ├── controller/
-│   │   │   ├── ChatController.java  # 聊天接口 POST /api/chat
-│   │   │   ├── ModelController.java # 模型切换接口 POST /api/model/switch
-│   │   │   └── KnowledgeController.java # 知识库上传接口 POST /api/knowledge/upload
+│   │   │   ├── ChatController.java          # POST /api/chat
+│   │   │   ├── ModelController.java         # /api/models CRUD + activate
+│   │   │   ├── RagController.java           # /api/rags CRUD + 文件上传
+│   │   │   ├── MemoryController.java        # /api/memories CRUD
+│   │   │   ├── AuthController.java          # /api/auth 登录/注册/me
+│   │   │   ├── SyncController.java          # /api/sync/import 本地→云端
+│   │   │   ├── KnowledgeController.java     # 知识库上传桩 (保留)
+│   │   │   └── UserController.java          # 用户管理桩 (保留)
 │   │   ├── service/
-│   │   │   ├── ChatService.java     # 聊天业务逻辑，调用 ChatClient
-│   │   │   └── KnowledgeService.java # 知识库业务逻辑，调用 VectorStore
+│   │   │   ├── ChatService.java             # Spring AI 聊天
+│   │   │   ├── ModelConfigService.java      # 模型配置 CRUD + 激活
+│   │   │   ├── MemoryConfigService.java     # 记忆配置 CRUD
+│   │   │   ├── RagService.java              # 知识库 CRUD + 文件落地
+│   │   │   └── KnowledgeService.java        # 向量存储桩 (保留)
 │   │   ├── model/
-│   │   │   ├── dto/
-│   │   │   │   ├── ChatRequest.java # 聊天请求 DTO (prompt, systemMessage)
-│   │   │   │   └── ModelSetting.java # 模型配置 DTO (apiKey, baseUrl, modelName)
-│   │   │   └── entity/
-│   │   │       └── CharacterPersona.java # 角色人设实体 (JPA Entity)
+│   │   │   ├── entity/
+│   │   │   │   ├── User.java                # 用户 (JPA)
+│   │   │   │   ├── ModelConfig.java         # 模型配置 (JPA)
+│   │   │   │   ├── MemoryConfig.java        # 记忆配置 (JPA)
+│   │   │   │   ├── Rag.java                 # 知识库文档 (JPA)
+│   │   │   │   └── CharacterPersona.java    # 角色人设 (JPA)
+│   │   │   └── dto/
+│   │   │       ├── ChatRequest.java         # 聊天请求
+│   │   │       ├── AuthRequest.java         # 登录请求
+│   │   │       ├── RegisterRequest.java     # 注册请求
+│   │   │       ├── LoginResponse.java       # 登录响应
+│   │   │       ├── SyncDataRequest.java     # 同步数据请求
+│   │   │       ├── ModelSetting.java        # 模型设定 DTO
+│   │   │       └── ModelSettingsWrapper.java
 │   │   ├── repository/
-│   │   │   └── interface.java       # CharacterPersonaRepository (JPA Repository)
-│   │   └── MyllmApplication.java   # Spring Boot 启动类
+│   │   │   ├── UserRepository.java
+│   │   │   ├── ModelConfigRepository.java
+│   │   │   ├── MemoryConfigRepository.java
+│   │   │   ├── RagRepository.java
+│   │   │   └── CharacterPersonaRepository.java
+│   │   ├── util/
+│   │   │   └── JwtUtil.java                 # JWT 工具类
+│   │   └── MyllmApplication.java
 │   ├── src/main/resources/
-│   │   └── application.yml          # 数据库、AI 配置
-│   └── pom.xml                      # Maven 依赖
+│   │   └── application.yml
+│   └── pom.xml
 │
-├── vue/myllm-ui/                    # 前端项目
+├── vue/myllm-ui/                            # 前端 (Vue 3)
 │   ├── src/
+│   │   ├── api/
+│   │   │   └── index.ts                     # Axios 实例 + 全部 API 函数 + JWT 拦截器
+│   │   ├── services/
+│   │   │   ├── auth.ts                      # Vue 组合式认证服务 (useAuth)
+│   │   │   └── localStorage.ts              # 浏览器本地存储服务 (CRUD + JSON 导入导出)
 │   │   ├── views/
-│   │   │   ├── Layout.vue           # 主布局（侧边栏 + 内容区 + 聊天输入框）
-│   │   │   ├── RagList.vue          # RAG 配置列表页
-│   │   │   ├── RuleConfig.vue       # 规则配置表单页
-│   │   │   ├── ModelModal.vue       # 模型选择弹窗 (11+ 预设模型)
-│   │   │   └── ColorModal.vue       # 主题色选择弹窗 (8 预设 + 自定义 HEX)
+│   │   │   ├── Layout.vue                   # 主布局 (侧边栏/头部/设置/底部)
+│   │   │   ├── LoginModal.vue               # 登录/注册弹窗 + 本地数据导入提示
+│   │   │   ├── ModelList.vue                # 模型配置列表 (在线/离线双模式)
+│   │   │   ├── RagList.vue                  # 知识库列表 (在线/离线双模式)
+│   │   │   ├── MemList.vue                  # 记忆配置列表 (在线/离线双模式)
+│   │   │   ├── ModelModal.vue               # 模型选择弹窗 (提供商/BaseURL/APIKey)
+│   │   │   ├── RuleConfig.vue               # 规则配置表单 (标题/颜色/Token/Prompt)
+│   │   │   └── ColorModal.vue               # 主题色选择弹窗
 │   │   ├── router/
-│   │   │   └── index.ts             # 路由配置 (单页 Layout)
-│   │   ├── App.vue                  # 根组件 (RouterView)
-│   │   └── main.ts                  # 入口文件
-│   ├── package.json                 # npm 依赖
-│   └── vite.config.ts               # Vite 配置
+│   │   │   └── index.ts
+│   │   ├── App.vue
+│   │   └── main.ts
+│   ├── package.json
+│   └── vite.config.ts
 │
-├── myllm_db.sql                     # 数据库初始化脚本
-└── README.md                        # 项目文档
+├── myllm_db.sql                             # 数据库初始化脚本 (6 表 + 测试数据)
+└── README.md
 ```
+
+---
 
 ## 快速开始
 
 ### 环境要求
 
-- JDK 21+
-- Node.js 22.18+ 或 24.12+
-- MySQL 8.0+
-- Docker（用于 Chroma 向量数据库）
+| 组件 | 版本 |
+|------|------|
+| JDK | 21+ |
+| Node.js | 22.18+ 或 24.12+ |
+| MySQL | 8.0+ |
+| Docker | 用于 Chroma (可选) |
 
 ### 1. 初始化数据库
 
@@ -98,224 +167,317 @@ myllm/
 mysql -u root -p < myllm_db.sql
 ```
 
-该脚本会自动创建 `myllm_db` 数据库、5 张表、2 个视图和测试数据。
+创建 `myllm_db` 数据库、6 张表 (User, ModelConfig, MemoryConfig, Rag, Session, Message) 以及 3 个测试用户 + 对话示例数据。
 
-### 2. 启动 Chroma 向量数据库
+### 2. 配置后端
 
-```bash
-docker run -p 8000:8000 chromadb/chroma
+编辑 `myllm/src/main/resources/application.yml`，设置 MySQL 密码：
+
+```yaml
+spring:
+  datasource:
+    password: your-mysql-password
+
+app:
+  jwt:
+    secret: your-64-char-random-secret-change-me
+    expiration-ms: 86400000
 ```
 
 ### 3. 启动后端
 
 ```bash
 cd myllm
-
-# 使用 Maven
 ./mvnw spring-boot:run
-
-# 或使用 Gradle
-./gradlew bootRun
 ```
 
-后端默认运行在 http://localhost:8080
+后端运行在 **http://localhost:8080**。JPA `ddl-auto: update` 自动同步实体到表结构。
 
 ### 4. 启动前端
 
 ```bash
 cd vue/myllm-ui
-
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
 ```
 
-前端默认运行在 http://localhost:5173
+前端运行在 **http://localhost:5173**。
 
-## API 接口
+> **测试账户**: `alice` / `password123` (admin), `bob` / `password123` (user)
 
-### 聊天接口
+---
 
-```http
-POST /api/chat
-Content-Type: application/json
+## API 接口文档
 
+### 认证接口 (公开)
+
+| Method | Path | Body | 说明 |
+|--------|------|------|------|
+| `POST` | `/api/auth/register` | `{username, password, email?, nickname?}` | 注册，返回 JWT + 用户信息 |
+| `POST` | `/api/auth/login` | `{username, password}` | 登录，更新 last_login 记录，返回 JWT |
+| `GET` | `/api/auth/me` | - | 获取当前用户信息 (需 Bearer Token) |
+
+### 数据同步 (需认证)
+
+| Method | Path | Body | 说明 |
+|--------|------|------|------|
+| `POST` | `/api/sync/import` | `{models[], memories[], rags[]}` | 将本地数据导入到当前用户账户 |
+
+### 模型配置 (需认证)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/api/models` | 获取全部模型配置 |
+| `POST` | `/api/models` | 创建模型配置 |
+| `PUT` | `/api/models/{id}` | 更新模型配置 (部分字段) |
+| `DELETE` | `/api/models/{id}` | 删除模型配置 |
+| `PUT` | `/api/models/{id}/activate` | 激活指定模型 (其余模型的 isEnabled 设为 0) |
+
+请求体示例 `POST /api/models`:
+```json
 {
-  "prompt": "你好，请介绍一下自己",
-  "systemMessage": "你是一个友好的AI助手"
-}
-```
-
-### 模型切换
-
-```http
-POST /api/model/switch
-Content-Type: application/json
-
-{
-  "apiKey": "your-api-key",
+  "modelName": "GPT-4o",
+  "provider": "OpenAI",
+  "apiKeyEncrypted": "sk-xxx",
   "baseUrl": "https://api.openai.com/v1",
-  "modelName": "gpt-4o"
+  "maxTokens": 4096,
+  "prompt": "你是一个友好的 AI 助手",
+  "isEnabled": 1
 }
 ```
 
-### 知识库上传
+### 知识库文档 (需认证)
 
-```http
-POST /api/knowledge/upload
-Content-Type: multipart/form-data
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/api/rags` | 获取全部文档 |
+| `POST` | `/api/rags` | 上传文档 (multipart: `file` + `description`) |
+| `PUT` | `/api/rags/{id}` | 更新文档元数据 |
+| `DELETE` | `/api/rags/{id}` | 删除文档 (同时清理磁盘文件) |
 
-file: <上传的文件>
+### 记忆配置 (需认证)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/api/memories` | 获取全部记忆配置 |
+| `POST` | `/api/memories` | 创建记忆配置 |
+| `PUT` | `/api/memories/{id}` | 更新记忆配置 (部分字段) |
+| `DELETE` | `/api/memories/{id}` | 删除记忆配置 |
+
+### 聊天 (公开)
+
+| Method | Path | Body | 说明 |
+|--------|------|------|------|
+| `POST` | `/api/chat` | `{content: "..."}` | 发送消息，返回 AI 回复 |
+
+---
+
+## 数据库设计
+
+`myllm_db.sql` 包含 6 张表，基于 MySQL 8.0 InnoDB / utf8mb4：
+
+```
+User ──1:N── ModelConfig
+User ──1:N── MemoryConfig
+User ──1:N── Rag
+User ──1:N── Session ──1:N── Message
+Session ──N:1── ModelConfig
+Session ──N:1── MemoryConfig
+Session ──N:1── Rag
 ```
 
-## 数据库表结构
+### Key 表概要
 
-### character_persona（角色人设表）
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT PK | 主键 |
-| name | VARCHAR(255) | 角色名称 |
-| system_prompt | TEXT | 核心系统提示词 |
-| temperature | DOUBLE | 创造力参数 (0.0-1.0) |
-| target_collection | VARCHAR(255) | 绑定的 Chroma 向量集合名称 |
-| created_at | DATETIME | 创建时间 |
-| updated_at | DATETIME | 更新时间 |
+| 表名 | 核心字段 | 说明 |
+|------|---------|------|
+| **User** | username, password_hash(bcrypt), email, phone, nickname, status, role, last_login_at, last_login_ip, login_count, deleted_at | 软删除 + 登录追溯 |
+| **ModelConfig** | UserId(FK), model_name, provider, api_key_encrypted, base_url, max_tokens, prompt, is_enabled | 多模型切换 |
+| **MemoryConfig** | UserId(FK), strategy_type(sliding_window/summary/hybrid), window_size, summary_trigger_tokens, enable_rag, rag_collection_name, enable_long_term_memory | 三种记忆策略 |
+| **Rag** | UserId(FK), filename, file_path, file_size, file_type, collection_name, chunk_count, status(processing/completed/failed) | 知识库文档 |
+| **Session** | UserId(FK), session_name, ModelId(FK), MemoryId(FK), RagId(FK) | 对话会话 |
+| **Message** | SessionId(FK), user_message, ai_response, tokens_used | 消息记录 |
 
-### chat_history（聊天记录表）
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT PK | 主键 |
-| persona_id | BIGINT FK | 关联的角色人设 ID |
-| user_message | TEXT | 用户发送的消息 |
-| ai_response | TEXT | AI 返回的回复 |
-| tokens_used | INT | 消耗的 token 数量 |
-| created_at | DATETIME | 消息发送时间 |
-
-### knowledge_document（知识库文档表）
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT PK | 主键 |
-| filename | VARCHAR(500) | 原始文件名 |
-| file_path | VARCHAR(1000) | 服务器存储路径 |
-| file_size | BIGINT | 文件大小（字节） |
-| collection_name | VARCHAR(255) | Chroma 向量集合名称 |
-| chunk_count | INT | 文档切片数量 |
-| status | VARCHAR(20) | 状态: processing/completed/failed |
-| created_at | DATETIME | 上传时间 |
-
-### rag_config（RAG 配置表）
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT PK | 主键 |
-| title | VARCHAR(255) | 配置标题 |
-| model_name | VARCHAR(100) | 使用的模型名称 |
-| api_key_encrypted | VARCHAR(500) | 加密存储的 API Key |
-| base_url | VARCHAR(500) | API 基础 URL |
-| theme_color | VARCHAR(20) | 界面主题颜色 (HEX) |
-| max_words | INT | AI 最大输出字数 |
-| rules | TEXT | RAG 检索规则 / Prompt 模板 |
-| is_active | TINYINT(1) | 是否启用 |
-| created_at | DATETIME | 创建时间 |
-| updated_at | DATETIME | 更新时间 |
-
-### model_config（模型配置表）
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT PK | 主键 |
-| model_name | VARCHAR(100) | 模型名称 |
-| provider | VARCHAR(50) | 提供商: openai/ollama/deepseek |
-| api_key_encrypted | VARCHAR(500) | 加密存储的 API Key |
-| base_url | VARCHAR(500) | API 基础 URL |
-| max_tokens | INT | 最大 token 数 |
-| is_default | TINYINT(1) | 是否默认模型 |
-| is_enabled | TINYINT(1) | 是否启用 |
-| created_at | DATETIME | 创建时间 |
+---
 
 ## 功能特性
 
-### 1. 多模型支持
-- DeepSeek-Chat / DeepSeek-Coder
-- GPT-4o / GPT-4-turbo
-- Claude-3.5-Sonnet / Claude-3-Opus
-- Gemini-1.5-Pro / Gemini-1.5-Flash
-- Llama-3-70B
-- Mistral-Large
-- Qwen-2.5-72B
-- 自定义模型
+### 用户认证系统
 
-### 2. RAG 知识库管理
-- 上传文档向量化
-- 配置检索规则
-- 绑定角色人设
+- **JWT 令牌认证**: 登录返回 token，请求自动附带 `Authorization: Bearer <token>`
+- **BCrypt 密码加密**: 密码使用 `BCryptPasswordEncoder` (强度 10) 哈希存储
+- **注册验证**: 用户名唯一性、密码长度 ≥ 6、邮箱唯一性检查
+- **登录追溯**: 记录 `last_login_at`, `last_login_ip`, `login_count`
+- **账户状态**: 正常(1) / 禁用(0) / 待验证(2) / 冻结(3)
+- **Spring Security**: 公开访问 `/api/auth/**` 和 `/api/chat`，其余 `/api/models/**`, `/api/rags/**`, `/api/memories/**`, `/api/sync/**` 需认证
+- **CORS**: 允许 `localhost:5173` 带凭据跨域
 
-### 3. 角色人设配置
-- 自定义 System Prompt
-- 设置创造力参数 (Temperature)
-- 绑定知识库集合
+### 离线 / 本地模式
 
-### 4. 主题定制
-- 8 种预设主题色: `#1e3a8a` `#0284c7` `#0d9488` `#16a34a` `#ca8a04` `#ea580c` `#dc2626` `#7c3aed`
-- 自定义 HEX 色值
-- 实时预览
+- **自动检测**: `navigator.onLine` + 登录状态 → 决定走 API 还是 localStorage
+- **本地存储服务** (`services/localStorage.ts`):
+  - 模型/记忆/知识库数据分别序列化到 localStorage
+  - 可配置存储前缀 (默认 `myllm_local_`)
+  - JSON 导出 / 导入 (备份恢复)
+  - 统计各类型数量和占用空间
+- **离线上传**: RagList 离线模式用 FileReader 将文件转为 base64 存入 localStorage
+- **云端同步**:
+  - 登录后检测本地数据 → 弹窗询问是否导入
+  - 调用 `POST /api/sync/import` 批量导入
+  - 导入后自动清除本地数据
+  - 网络恢复时自动触发同步
+- **离线角标**: 未登录/断网时在头部和每个列表页显示 "📱 本地模式"
+
+### 模型配置管理
+
+- 三步创建流程: ModelModal (选择模型+提供商+BaseURL+APIKey) → RuleConfig (Prompt+Token+颜色+标题)
+- 11 个预设模型 + 自定义模型名称
+- 一键激活 (其余模型自动禁用)
+- 在线存 API，离线存 localStorage
+
+### 知识库文档管理
+
+- 拖拽 / 点击选择文件上传
+- 文件类型标签、切片数、处理状态 (processing/completed/failed)
+- 删除同时清理磁盘文件
+- 支持 PDF / DOCX / MD / TXT / CSV / JSON
+
+### 记忆策略配置
+
+- 三种策略: 滑动窗口 / 摘要压缩 / 混合
+- RAG 开关 → 条件显示集合名称 + Top-K
+- 长期记忆 / 保留 System Prompt 开关
+- 窗口大小 / 最大历史 / 摘要阈值 / 压缩间隔
+
+### UI 设计
+
+- 毛玻璃风格: `backdrop-filter: blur(20px)` + 半透明背景 + 白边框
+- 可折叠侧边栏 (64px ⇔ 240px)
+- 全局主题色 CSS 变量 (`--theme-color`)
+- 8 种预设 + 自定义 HEX 实时预览
+- 用户头像 + 下拉菜单
+
+---
 
 ## 配置说明
 
-### application.yml
+### application.yml (后端)
 
 ```yaml
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/myllm_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     username: root
-    password:  # 替换为你的 MySQL 密码
+    password: your-mysql-password
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: update       # 开发: update, 生产: validate
     show-sql: true
 
-  ai:
-    chroma:
-      store:
-        host: http://localhost:8000
-        collection-name: my_rag_collection
+app:
+  jwt:
+    secret: your-64-char-secret
+    expiration-ms: 86400000  # 24 小时
 ```
 
-## 开发说明
+### package.json (前端)
 
-### 后端开发
+```json
+{
+  "engines": { "node": "^22.18.0 || >=24.12.0" },
+  "scripts": {
+    "dev": "vite",
+    "build": "run-p type-check \"build-only {@}\" --",
+    "type-check": "vue-tsc --build"
+  }
+}
+```
 
-1. 实体类使用 Lombok `@Data` 注解自动生成 getter/setter
-2. JPA Repository 继承 `JpaRepository` 获得 CRUD 能力
-3. `ddl-auto: update` 模式会自动同步实体到数据库表
+---
 
-### 前端开发
+## 更新日志
 
-1. 组件使用 Vue 3 Composition API (`<script setup>`)
-2. 样式使用 Scoped CSS 隔离
-3. 路由配置在 `src/router/index.ts`
-4. UI 采用毛玻璃（Glassmorphism）设计风格
+### v0.2.0 (2026-07-04) — 认证 + 离线同步
+
+**后端新增 (12 文件)**:
+- `SecurityConfig.java` — Spring Security 配置 (JWT + BCrypt + CORS + 路径权限)
+- `JwtAuthFilter.java` — Bearer Token 提取与验证
+- `JwtUtil.java` — JWT 生成 / 解析 / 验证工具
+- `User.java` — 用户 JPA 实体 (映射现有 User 表)
+- `UserRepository.java` — 用户查询接口
+- `AuthController.java` — `/api/auth/register`, `/api/auth/login`, `/api/auth/me`
+- `SyncController.java` — `/api/sync/import` 批量导入本地数据
+- `ModelConfig.java` / `MemoryConfig.java` / `Rag.java` — 3 张核心表 JPA 实体
+- `ModelConfigService.java` / `MemoryConfigService.java` / `RagService.java` — CRUD 服务
+- `ModelConfigRepository.java` / `MemoryConfigRepository.java` / `RagRepository.java` — JPA 仓储
+- `AuthRequest.java` / `RegisterRequest.java` / `LoginResponse.java` / `SyncDataRequest.java` — DTO
+
+**后端重构 (4 文件)**:
+- `ChatController.java` — 修复 `MessageRequest`→`ChatRequest`，路径统一为 `/api/chat`，注入 `ChatService`
+- `ModelController.java` — 从桩实现重写为完整 REST CRUD + `/activate`
+- `UserController.java` — 从空文件修复为合法控制器
+- `ModelSetting.java` — 修复 `integer`→`Integer`，添加 `baseUrl` 字段
+
+**后端修复 (3 文件)**:
+- `interface.java` → `CharacterPersonaRepository.java` (文件重命名)
+- `KnowledgeService.java` — 移除不可用的 Chroma VectorStore 依赖
+- `AiConfig.java` — 清理 VectorStore 引用
+- `pom.xml` — 添加 `spring-boot-starter-security` + `jjwt` 三件套，注释不可用的 `spring-ai-chroma-store-starter`
+
+**前端新增 (6 文件)**:
+- `api/index.ts` — Axios 实例 + JWT 拦截器 + 全部类型定义 + API 函数
+- `services/auth.ts` — Vue 认证组合式函数 (`useAuth`)
+- `services/localStorage.ts` — 本地存储服务 (CRUD + JSON 导出/导入 + 统计)
+- `LoginModal.vue` — 登录/注册弹窗 (双标签 + 同步提示)
+- `MemList.vue` — 记忆策略配置 (独立 UI，在线/离线双模式)
+- `views/pic/*.svg` — 侧边栏图标资源
+
+**前端重构 (5 文件)**:
+- `Layout.vue` — 完整重写: 登录按钮/用户信息/下拉菜单/离线角标/系统设置面板 (存储前缀+导出+导入+清空)
+- `ModelList.vue` — 后端 API 集成 + 离线 localStorage 模式 + 激活/删除按钮
+- `RagList.vue` — 文件上传/拖拽 + 离线 base64 + 状态标签 + 后端集成
+- `ModelModal.vue` — 添加提供商下拉 + BaseURL 输入
+- `RuleConfig.vue` — 重命名 `maxWords`→`maxTokens`, `rules`→`prompt`
+
+### v0.1.0 — 初始版本
+
+基础项目框架搭建，前端毛玻璃 UI，后端桩实现，数据库设计。
+
+---
 
 ## 测试
 
-### 后端单元测试
+### 后端编译与测试
 
 ```bash
 cd myllm
-./mvnw test
+./mvnw compile        # 编译检查
+./mvnw test           # 运行单元测试
+./mvnw spring-boot:run # 启动
 ```
 
 ### 前端类型检查
 
 ```bash
 cd vue/myllm-ui
-npm run type-check
+npm run type-check    # vue-tsc 类型检查
+npm run build         # 生产构建
 ```
+
+### 集成测试步骤
+
+1. 启动 MySQL，运行 `myllm_db.sql`
+2. 启动后端 `./mvnw spring-boot:run`
+3. 启动前端 `npm run dev`
+4. 浏览器访问 `http://localhost:5173`
+5. 点击右上"登录/注册" → 用 `alice` / `password123` 登录
+6. 验证模型/知识库/记忆配置的 CRUD
+7. 退出登录 → 创建一些离线数据 → 重新登录 → 验证同步弹窗 → 确认导入
+8. 系统设置 → 导出 JSON → 清空 → 导入 JSON → 验证数据恢复
+9. `curl -X GET http://localhost:8080/api/models` → 应返回 401/403
+
+---
 
 ## License
 
 MIT
-#   m y l l m  
- 

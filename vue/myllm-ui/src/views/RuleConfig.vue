@@ -5,14 +5,14 @@ import ColorModal from './ColorModal.vue'
 const props = defineProps<{ initialData: any }>()
 const emit = defineEmits(['back', 'save'])
 
-const title = ref(props.initialData.title)
-const chosenColor = ref(props.initialData.color)
+const title = ref(props.initialData.title || '')
+const chosenColor = ref(props.initialData.color || '#1e3a8a')
 const showColorModal = ref(false)
-const maxWords = ref(props.initialData.maxWords)
-const rules = ref(props.initialData.rules)
+const maxTokens = ref(props.initialData.maxTokens || 4096)
+const prompt = ref(props.initialData.prompt || '')
 
 const openColorPicker = () => {
-  showColorModal.value = true // 点击颜色圆圈，拉起覆盖式颜色小页面
+  showColorModal.value = true
 }
 
 const selectColor = (color: string) => {
@@ -24,8 +24,8 @@ const handleSave = () => {
   emit('save', {
     title: title.value,
     color: chosenColor.value,
-    maxWords: maxWords.value,
-    rules: rules.value
+    maxTokens: maxTokens.value,
+    prompt: prompt.value
   })
 }
 </script>
@@ -39,7 +39,7 @@ const handleSave = () => {
     <div class="form-container">
       <div class="form-item">
         <label>配置标题：</label>
-        <input type="text" v-model="title" placeholder="请输入当前知识库规则方案的名称..." class="styled-input" />
+        <input type="text" v-model="title" placeholder="请输入模型设定的名称..." class="styled-input" />
       </div>
 
       <div class="form-item inline-item">
@@ -49,16 +49,13 @@ const handleSave = () => {
       </div>
 
       <div class="form-item">
-        <label>输出字数限制 (字符范围)：</label>
-        <div class="range-row">
-          <input type="number" v-model="maxWords" class="styled-input min-input" />
-          <span>字以内</span>
-        </div>
+        <label>最大输出 Token 数：</label>
+        <input type="number" v-model="maxTokens" class="styled-input" style="width: 200px;" />
       </div>
 
       <div class="form-item">
-        <label>知识拆解与检索核心规则 (RAG Prompt)：</label>
-        <textarea rows="5" v-model="rules" placeholder="请输入文档向量化切片后的深度提取规则，如：优先匹配第二章内容..." class="styled-textarea"></textarea>
+        <label>系统提示词模板 (System Prompt)：</label>
+        <textarea rows="5" v-model="prompt" placeholder="请输入系统提示词，如：你是一个专业的法律顾问..." class="styled-textarea"></textarea>
       </div>
 
       <button class="save-btn" :style="{ backgroundColor: chosenColor }" @click="handleSave">保存并应用配置</button>
@@ -77,8 +74,6 @@ const handleSave = () => {
 .color-picker-trigger { width: 32px; height: 32px; border-radius: 50%; cursor: pointer; border: 2px solid white; box-shadow: 0 0 8px rgba(0,0,0,0.15); }
 .color-code { font-size: 13px; font-weight: bold; }
 .styled-input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); box-sizing: border-box; outline: none; }
-.min-input { width: 120px; text-align: center; margin-right: 8px; }
-.range-row { display: flex; align-items: center; font-size: 14px; color: #475569; }
 .styled-textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); box-sizing: border-box; outline: none; resize: none; }
 .save-btn { align-self: flex-end; padding: 12px 28px; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
 </style>
