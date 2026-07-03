@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: myllm
+#  ⚠️ 注意：在启动 Spring Boot 之前，请确保：
+#  已经在本地 MySQL 中创建了名为 myllm_db 的空数据库 (CREATE DATABASE myllm_db;)。
+#  本地已启动 Chroma 服务（通常使用 Docker 启动：docker run -p 8000:8000 chromadb/chroma）。
+  
+  # 1. MySQL 基础连接配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/myllm_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    password:  # 替换为你的 MySQL 密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update # 自动根据 Java 实体类在数据库建表，省去手动建表麻烦
+    show-sql: true # 在控制台打印 SQL 语句，方便调试
+
+  # 2. Chroma 向量数据库基础配置
+  ai:
+    chroma:
+      store:
+        host: http://localhost:8000 # Chroma 默认的服务端口
+        collection-name: my_rag_collection # 默认的向量集合名称
