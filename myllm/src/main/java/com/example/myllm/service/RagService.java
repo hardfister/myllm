@@ -61,8 +61,17 @@ public class RagService {
         if (updated.getDescription() != null) existing.setDescription(updated.getDescription());
         if (updated.getCollectionName() != null) existing.setCollectionName(updated.getCollectionName());
         if (updated.getStatus() != null) existing.setStatus(updated.getStatus());
+        if (updated.getIsEnabled() != null) existing.setIsEnabled(updated.getIsEnabled());
 
         return ragRepository.save(existing);
+    }
+
+    @Transactional
+    public Rag toggleRag(Long id) {
+        Rag target = ragRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("知识库文档不存在: " + id));
+        target.setIsEnabled(target.getIsEnabled() != null && target.getIsEnabled() == 1 ? 0 : 1);
+        return ragRepository.save(target);
     }
 
     @Transactional

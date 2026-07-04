@@ -38,6 +38,8 @@ public class Rag {
     @Column(length = 500)
     private String description;
 
+    private Integer isEnabled = 1;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

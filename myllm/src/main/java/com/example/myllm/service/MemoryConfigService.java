@@ -41,8 +41,17 @@ public class MemoryConfigService {
         if (updated.getEnableLongTermMemory() != null) existing.setEnableLongTermMemory(updated.getEnableLongTermMemory());
         if (updated.getCompressionInterval() != null) existing.setCompressionInterval(updated.getCompressionInterval());
         if (updated.getReserveSystemPrompt() != null) existing.setReserveSystemPrompt(updated.getReserveSystemPrompt());
+        if (updated.getIsEnabled() != null) existing.setIsEnabled(updated.getIsEnabled());
 
         return memoryConfigRepository.save(existing);
+    }
+
+    @Transactional
+    public MemoryConfig toggleMemory(Long id) {
+        MemoryConfig target = memoryConfigRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("记忆配置不存在: " + id));
+        target.setIsEnabled(target.getIsEnabled() != null && target.getIsEnabled() == 1 ? 0 : 1);
+        return memoryConfigRepository.save(target);
     }
 
     @Transactional

@@ -40,6 +40,8 @@ public class MemoryConfig {
 
     private Integer reserveSystemPrompt = 1;
 
+    private Integer isEnabled = 1;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -37,4 +37,9 @@ public class MemoryController {
         memoryConfigService.deleteMemory(id);
         return "删除成功";
     }
+
+    @PutMapping("/{id}/toggle")
+    public MemoryConfig toggleMemory(@PathVariable Long id) {
+        return memoryConfigService.toggleMemory(id);
+    }
 }

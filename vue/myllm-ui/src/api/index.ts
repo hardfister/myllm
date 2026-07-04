@@ -57,6 +57,7 @@ export interface MemoryConfig {
   enableLongTermMemory: number
   compressionInterval: number
   reserveSystemPrompt: number
+  isEnabled?: number
   createdAt?: string
   updatedAt?: string
 }
@@ -72,6 +73,7 @@ export interface Rag {
   chunkCount: number
   status: string
   description?: string
+  isEnabled?: number
   createdAt?: string
   updatedAt?: string
 }
@@ -162,6 +164,10 @@ export function deleteMemory(id: number): Promise<{ data: string }> {
   return api.delete(`/api/memories/${id}`)
 }
 
+export function toggleMemory(id: number): Promise<{ data: MemoryConfig }> {
+  return api.put(`/api/memories/${id}/toggle`)
+}
+
 // ==================== 知识库文档 API ====================
 
 export function getRags(): Promise<{ data: Rag[] }> {
@@ -180,6 +186,10 @@ export function updateRag(id: number, data: Partial<Rag>): Promise<{ data: Rag }
 
 export function deleteRag(id: number): Promise<{ data: string }> {
   return api.delete(`/api/rags/${id}`)
+}
+
+export function toggleRag(id: number): Promise<{ data: Rag }> {
+  return api.put(`/api/rags/${id}/toggle`)
 }
 
 // ==================== 聊天 API ====================

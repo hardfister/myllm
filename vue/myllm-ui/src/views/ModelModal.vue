@@ -16,9 +16,9 @@ const customModelName = ref<string>('')
 const providers = ['DeepSeek', 'OpenAI', 'Anthropic', 'Ollama', 'Custom']
 
 const famousModels = [
-  'DeepSeek-Chat', 'DeepSeek-Coder', 'GPT-4o', 'GPT-4-turbo',
-  'Claude-3.5-Sonnet', 'Claude-3-Opus', 'Gemini-1.5-Pro',
-  'Gemini-1.5-Flash', 'Llama-3-70B', 'Mistral-Large', 'Qwen-2.5-72B'
+  'DeepSeekv4-flash', 'DeepSeekv4-pro[1m]', 'GPT-5.1', 'GPT-5.2',
+  'Claude-4.6-Sonnet', 'Claude-4.7-Opus', 'Claude-4.8-Opus', 'Gemini-3.5-flash',
+  'Gemini-3.1-pro', 'Llama-3-70B', 'Mistral-Large', 'Qwen-3.5-72B'
 ]
 
 const openModelPicker = () => {

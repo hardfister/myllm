@@ -39,4 +39,9 @@ public class RagController {
         ragService.deleteRag(id);
         return "删除成功";
     }
+
+    @PutMapping("/{id}/toggle")
+    public Rag toggleRag(@PathVariable Long id) {
+        return ragService.toggleRag(id);
+    }
 }
