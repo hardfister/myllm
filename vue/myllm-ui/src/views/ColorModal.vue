@@ -1,36 +1,50 @@
 <script setup lang="ts">
+/**
+ * ColorModal.vue — 主题色选择弹窗
+ * ---------------
+ * 功能：
+ *   1. 8 种预设色点击秒选
+ *   2. 自定义 HEX 色值输入
+ *   3. 点击预设色或"应用"按钮 → emit('select', hexColor)
+ *
+ * Emits：
+ *   close  — 关闭弹窗
+ *   select — 选中颜色，参数为 hex 字符串如 "#1e3a8a"
+ */
 import { ref } from 'vue'
 
 const emit = defineEmits(['close', 'select'])
 const customHexColor = ref<string>('#1e3a8a')
 
-// 预设常用高级视觉设计颜色
+// 8 种预设高级设计色
 const presetColors = ['#1e3a8a', '#0284c7', '#0d9488', '#16a34a', '#ca8a04', '#ea580c', '#dc2626', '#7c3aed']
 </script>
 
 <template>
-<Teleport to="body">
-  <div class="color-mask">
-    <div class="color-box">
-      <h4>🎨 选择主题色 (影响系统文字与图标)</h4>
-      <div class="color-presets">
-        <div 
-          v-for="color in presetColors" 
-          :key="color" 
-          class="color-dot" 
-          :style="{ backgroundColor: color }"
-          @click="emit('select', color)"
-        ></div>
+  <Teleport to="body">
+    <div class="color-mask">
+      <div class="color-box">
+        <h4>🎨 选择主题色 (影响系统文字与图标)</h4>
+        <!-- 预设色块：4 列网格 -->
+        <div class="color-presets">
+          <div
+            v-for="color in presetColors"
+            :key="color"
+            class="color-dot"
+            :style="{ backgroundColor: color }"
+            @click="emit('select', color)"
+          ></div>
+        </div>
+        <!-- 自定义 HEX 输入 -->
+        <div class="custom-hex">
+          <label>或输入16进制色值：</label>
+          <input type="text" v-model="customHexColor" class="hex-input" placeholder="#FFFFFF" />
+          <button class="confirm-hex-btn" @click="emit('select', customHexColor)">应用</button>
+        </div>
+        <button class="close-btn" @click="emit('close')">取消</button>
       </div>
-      <div class="custom-hex">
-        <label>或输入16进制色值：</label>
-        <input type="text" v-model="customHexColor" class="hex-input" placeholder="#FFFFFF" />
-        <button class="confirm-hex-btn" @click="emit('select', customHexColor)">应用</button>
-      </div>
-      <button class="close-btn" @click="emit('close')">取消</button>
     </div>
-  </div>
-</Teleport>
+  </Teleport>
 </template>
 
 <style scoped>

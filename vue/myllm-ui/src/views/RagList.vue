@@ -1,4 +1,20 @@
 <script setup lang="ts">
+/**
+ * RagList.vue — 知识库文档管理列表
+ * ---------------
+ * 功能：
+ *   1. 拖拽/点击选择文件上传，关联 Chroma 向量集合
+ *   2. 列表展示：文件名 / 集合 / 切片数 / 处理状态 / 启用状态
+ *   3. ☑/☐ 多选启用（独立切换，不影响其他）
+ *   4. 删除同时清理磁盘文件
+ *   5. 在线/离线双模式：服务器 API 或 localStorage（base64 存储文件）
+ *
+ * 数据流：
+ *   在线：GET/POST/DELETE /api/rags
+ *   离线：loadRags() / saveRags() — 文件以 base64 嵌在 JSON 中
+ *
+ * Emits：updateColor(color) — 固定使用 #0d9488
+ */
 import { ref, onMounted } from 'vue'
 import { getRags, createRag, deleteRag, toggleRag } from '../api'
 import { saveRags, loadRags } from '../services/localStorage'
@@ -8,17 +24,18 @@ import type { Rag } from '../api'
 const { isLoggedIn, isOffline } = useAuth()
 const emit = defineEmits(['updateColor'])
 
-const rags = ref<Rag[]>([])
-const showUploadForm = ref(false)
-const uploading = ref(false)
+const rags = ref<Rag[]>([])          // 文档列表
+const showUploadForm = ref(false)    // 是否显示上传区域
+const uploading = ref(false)         // 上传中
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const description = ref('')
-const dragOver = ref(false)
+const dragOver = ref(false)          // 拖拽悬停状态
 
 const useServer = () => isLoggedIn.value && !isOffline.value
 let localIdCounter = Date.now()
 
+// ===== 数据加载 =====
 const loadRagsData = async () => {
   if (useServer()) {
     try { const res = await getRags(); rags.value = res.data }
@@ -27,10 +44,10 @@ const loadRagsData = async () => {
     rags.value = loadRags()
   }
 }
-
 onMounted(loadRagsData)
 const persistRags = () => { if (!useServer()) saveRags(rags.value) }
 
+// ===== 文件选择/拖拽处理 =====
 const onFileChange = (e: Event) => {
   const t = e.target as HTMLInputElement
   if (t.files?.[0]) selectedFile.value = t.files[0]
@@ -42,19 +59,25 @@ const onDrop = (e: DragEvent) => {
   if (e.dataTransfer?.files?.[0]) selectedFile.value = e.dataTransfer.files[0]
 }
 
+// ===== 文件上传（在线 → multipart；离线 → base64） =====
 const handleUpload = async () => {
   if (!selectedFile.value) { alert('请先选择文件'); return }
   uploading.value = true
   try {
     if (useServer()) {
+      // 服务器模式：FormData 上传
       const fd = new FormData()
       fd.append('file', selectedFile.value)
       if (description.value) fd.append('description', description.value)
       await createRag(fd)
       await loadRagsData()
     } else {
+      // 离线模式：FileReader 读为 base64 存 localStorage
       const reader = new FileReader()
-      const fileData = await new Promise<string>(r => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(selectedFile.value!) })
+      const fileData = await new Promise<string>(r => {
+        reader.onload = () => r(reader.result as string)
+        reader.readAsDataURL(selectedFile.value!)
+      })
       rags.value.unshift({
         id: ++localIdCounter, filename: selectedFile.value!.name,
         fileSize: selectedFile.value!.size, fileType: selectedFile.value!.type || 'unknown',
@@ -68,7 +91,7 @@ const handleUpload = async () => {
   finally { uploading.value = false }
 }
 
-// 多选切换 — 只翻转当前项
+// ===== 多选切换：只翻转当前项（知识库可多选） =====
 const handleToggle = async (record: Rag, event: Event) => {
   event.stopPropagation()
   if (record.id == null) return
@@ -81,6 +104,7 @@ const handleToggle = async (record: Rag, event: Event) => {
   }
 }
 
+// ===== 删除 =====
 const handleDelete = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除？')) return
@@ -90,6 +114,7 @@ const handleDelete = async (id: number, event: Event) => {
   } catch (e) { console.error('删除失败:', e) }
 }
 
+// ===== 工具函数 =====
 const formatFileSize = (b: number) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB'
 const statusLabel = (s: string): string => ({ completed: '已完成', processing: '处理中', failed: '失败' } as Record<string, string>)[s] || s
 const statusColor = (s: string) => ({ completed: '#16a34a', processing: '#ea580c', failed: '#dc2626' } as Record<string, string>)[s] || '#94a3b8'
@@ -107,6 +132,7 @@ emit('updateColor', '#0d9488')
         </button>
       </div>
 
+      <!-- ===== 文件上传区域 ===== -->
       <div v-if="showUploadForm" class="upload-form">
         <div :class="['drop-zone', { 'drag-over': dragOver }]" @dragover="onDragOver" @dragleave="onDragLeave"
           @drop="onDrop" @click="fileInput?.click()">
@@ -125,6 +151,7 @@ emit('updateColor', '#0d9488')
         </div>
       </div>
 
+      <!-- ===== 文档卡片列表 ===== -->
       <div class="records-grid">
         <div v-for="item in rags" :key="item.id" class="record-card"
           :class="{ 'is-enabled': item.isEnabled === 1 }"

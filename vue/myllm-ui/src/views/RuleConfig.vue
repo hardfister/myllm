@@ -1,24 +1,32 @@
 <script setup lang="ts">
+/**
+ * RuleConfig.vue — 模型规则配置表单
+ * ---------------
+ * 在 ModelList 三步流程中作为第二步出现：
+ *   ModelModal（选模型+APIKey） → RuleConfig（配Prompt+Token+颜色） → 保存
+ *
+ * Props：
+ *   initialData — 初始数据 { title, color, maxTokens, prompt }
+ *
+ * Emits：
+ *   back — 返回上一步（ModelModal）
+ *   save — 保存配置，参数 { title, color, maxTokens, prompt }
+ */
 import { ref } from 'vue'
 import ColorModal from './ColorModal.vue'
 
 const props = defineProps<{ initialData: any }>()
 const emit = defineEmits(['back', 'save'])
 
+// 从父组件传入的初始值填充（编辑模式有值，新建模式有默认值）
 const title = ref(props.initialData.title || '')
 const chosenColor = ref(props.initialData.color || '#1e3a8a')
 const showColorModal = ref(false)
-const maxTokens = ref(props.initialData.maxTokens || 4096)
-const prompt = ref(props.initialData.prompt || '')
+const maxTokens = ref(props.initialData.maxTokens || 4096)   // 最大输出 Token
+const prompt = ref(props.initialData.prompt || '')            // System Prompt 模板
 
-const openColorPicker = () => {
-  showColorModal.value = true
-}
-
-const selectColor = (color: string) => {
-  chosenColor.value = color
-  showColorModal.value = false
-}
+const openColorPicker = () => { showColorModal.value = true }
+const selectColor = (color: string) => { chosenColor.value = color; showColorModal.value = false }
 
 const handleSave = () => {
   emit('save', {
@@ -37,22 +45,26 @@ const handleSave = () => {
     </div>
 
     <div class="form-container">
+      <!-- 配置标题（仅前端展示用） -->
       <div class="form-item">
         <label>配置标题：</label>
         <input type="text" v-model="title" placeholder="请输入模型设定的名称..." class="styled-input" />
       </div>
 
+      <!-- 主题色选择（前端展示用） -->
       <div class="form-item inline-item">
         <label>识别颜色主题：</label>
         <div class="color-picker-trigger" @click="openColorPicker" :style="{ backgroundColor: chosenColor }"></div>
         <span class="color-code" :style="{ color: chosenColor }">{{ chosenColor }}</span>
       </div>
 
+      <!-- 最大输出 Token 数 -->
       <div class="form-item">
         <label>最大输出 Token 数：</label>
         <input type="number" v-model="maxTokens" class="styled-input" style="width: 200px;" />
       </div>
 
+      <!-- 系统提示词（System Prompt）模板 -->
       <div class="form-item">
         <label>系统提示词模板 (System Prompt)：</label>
         <textarea rows="5" v-model="prompt" placeholder="请输入系统提示词，如：你是一个专业的法律顾问..." class="styled-textarea"></textarea>

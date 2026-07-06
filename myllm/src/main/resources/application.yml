@@ -2,7 +2,6 @@ spring:
   application:
     name: myllm
 
-  # 1. MySQL 基础连接配置
   datasource:
     url: jdbc:mysql://localhost:3306/myllm_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     username: root
@@ -14,14 +13,7 @@ spring:
       ddl-auto: update
     show-sql: true
 
-  # 2. Chroma 向量数据库基础配置
-  ai:
-    chroma:
-      store:
-        host: http://localhost:8000
-        collection-name: my_rag_collection
-
-# 3. JWT 认证配置
+# JWT
 app:
   jwt:
     secret: myllm-jwt-secret-key-2026-please-change-this-in-production-environment

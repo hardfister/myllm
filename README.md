@@ -1,8 +1,8 @@
 # MyLLM — 大模型对话配置管理平台
 
-> 最后更新: 2026-07-04
+> 最后更新: 2026-07-06
 
-全栈 LLM 对话应用，基于 **Spring Boot 4.1 + Vue 3 + MySQL**。支持多模型预设切换、知识库管理、记忆策略配置、JWT 用户认证、离线本地存储与数据云端同步。
+全栈 LLM 对话应用，基于 **Spring Boot 4.1 + Vue 3 + MySQL**。支持多模型预设切换、知识库管理、记忆策略配置、JWT 用户认证、离线本地存储、智能对话、历史记录管理。
 
 ---
 
@@ -35,6 +35,8 @@ MyLLM 提供从模型配置到对话的完整链路：
 | **记忆策略配置** | 三种策略（滑动窗口 / 摘要压缩 / 混合）、RAG 开关、长期记忆开关 |
 | **用户认证** | JWT 登录 / 注册、BCrypt 密码加密、Spring Security 权限控制 |
 | **离线 / 本地模式** | 未登录或断网时数据存 localStorage；登录后一键导入云端；JSON 导出 / 导入备份 |
+| **智能对话** | 自动加载启用的模型/RAG/记忆配置，动态拼装 System Prompt 后调 LLM；错误分类提示 |
+| **历史记录** | 栈式排列，第一条消息触发入库；⋮ 菜单右展开 → 二次确认删除；MySQL 持久化 |
 | **主题定制** | 8 种预设色 + HEX 自定义，全局 CSS 变量实时生效 |
 | **毛玻璃 UI** | backdrop-filter 半透明玻璃态卡片 + 可折叠侧边栏 |
 
@@ -396,6 +398,35 @@ app:
 ---
 
 ## 更新日志
+
+### v0.3.0 (2026-07-06) — 智能对话 + 历史记录
+
+**后端新增 (4 文件)**:
+- `Session.java` / `Message.java` — JPA 实体，映射 Session 和 Message 表
+- `SessionRepository.java` / `MessageRepository.java` — JPA 仓储
+
+**后端重构 (2 文件)**:
+- `ChatService.java` — 完整重写:
+  - 动态查询启用的模型/RAG/记忆配置 → 自动拼装 System Prompt
+  - LangChain4j 调 LLM（兼容 OpenAI/DeepSeek 所有兼容接口）
+  - 错误分类：连接失败 / 超时 / 认证失败 / 配额用尽
+  - 用户首条消息自动创建 Session 记录并持久化到 MySQL
+  - 每轮对话保存 Message（user_message + ai_response + tokens_used）
+  - 记忆策略裁剪（sliding_window/hybrid）
+  - `listSessions()` — 历史会话列表，按最近活跃排序
+  - `deleteSession(dbId)` — 级联删除会话及全部消息
+- `ChatController.java` — 新增 `GET /api/sessions` 和 `DELETE /api/sessions/{dbId}` 端点
+- `ChatRequest.java` / `ChatResponse.java` — DTO 重构
+
+**前端新增/重构 (2 文件)**:
+- `Layout.vue` — 聊天界面完整实现:
+  - 聊天气泡 UI（用户蓝右/AI 白左/错误红中）
+  - 打字动画（三点跳跃指示器）
+  - 历史记录面板（栈式排列，侧边栏展开时可见）
+  - 每条历史记录右侧 ⋯ 按钮 → 右展开 → 删除（二次确认）
+  - 自动滚动到最新消息
+  - 发送后自动刷新历史列表
+- `api/index.ts` — 新增 `HistorySession` 接口 / `listSessions` / `deleteSession` API
 
 ### v0.2.0 (2026-07-04) — 认证 + 离线同步
 

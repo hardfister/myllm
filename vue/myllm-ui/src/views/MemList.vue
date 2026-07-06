@@ -1,4 +1,20 @@
 <script setup lang="ts">
+/**
+ * MemList.vue — 记忆策略配置管理列表
+ * ---------------
+ * 功能：
+ *   1. 三种策略可选：滑动窗口 / 摘要压缩 / 混合策略
+ *   2. 丰富参数配置：窗口大小、最大历史、摘要阈值、压缩间隔、RAG、长期记忆等
+ *   3. ☑/☐ 多选启用（独立切换）
+ *   4. 修改 / 删除操作
+ *   5. 在线/离线双模式
+ *
+ * 数据流：
+ *   在线：GET/POST/PUT/DELETE /api/memories + PUT /api/memories/{id}/toggle
+ *   离线：loadMemories() / saveMemories()
+ *
+ * Emits：updateColor(color) — 固定使用 #7c3aed
+ */
 import { ref, onMounted } from 'vue'
 import { getMemories, createMemory, updateMemory, deleteMemory, toggleMemory } from '../api'
 import { saveMemories, loadMemories } from '../services/localStorage'
@@ -8,22 +24,24 @@ import type { MemoryConfig } from '../api'
 const { isLoggedIn, isOffline } = useAuth()
 const emit = defineEmits(['updateColor'])
 
-const memories = ref<MemoryConfig[]>([])
-const showForm = ref(false)
-const isEditing = ref(false)
-const saving = ref(false)
+const memories = ref<MemoryConfig[]>([])  // 记忆配置列表
+const showForm = ref(false)               // 是否显示配置表单
+const isEditing = ref(false)              // 新建/编辑
+const saving = ref(false)                 // 保存中
 
 const useServer = () => isLoggedIn.value && !isOffline.value
 let localIdCounter = Date.now()
 
+// 新建时的默认值
 const defaultConfig = (): MemoryConfig => ({
   strategyType: 'sliding_window', windowSize: 10, summaryTriggerTokens: 2048,
   summaryMaxLength: 300, enableRag: 0, ragCollectionName: '', ragTopK: 3,
   maxHistoryMessages: 50, enableLongTermMemory: 0, compressionInterval: 10,
-  reserveSystemPrompt: 1, isEnabled: 0
+  reserveSystemPrompt: 1, isEnabled: 0  // 新建默认不启用，待用户手动开启
 })
 const form = ref<MemoryConfig & { id?: number }>(defaultConfig())
 
+// ===== 数据加载 =====
 const loadMemoriesData = async () => {
   if (useServer()) {
     try { const res = await getMemories(); memories.value = res.data }
@@ -35,7 +53,7 @@ const loadMemoriesData = async () => {
 onMounted(loadMemoriesData)
 const persistMemories = () => { if (!useServer()) saveMemories(memories.value) }
 
-// 多选切换 — 只翻转当前项
+// ===== 多选切换：翻转单个配置（记忆配置可多选） =====
 const handleToggle = async (record: MemoryConfig, event: Event) => {
   event.stopPropagation()
   if (record.id == null) return
@@ -48,11 +66,13 @@ const handleToggle = async (record: MemoryConfig, event: Event) => {
   }
 }
 
+// ===== 新建/编辑表单 =====
 const handleNew = () => { isEditing.value = false; form.value = { ...defaultConfig() }; showForm.value = true }
 const handleEdit = (item: MemoryConfig, event?: Event) => {
   event?.stopPropagation(); isEditing.value = true; form.value = { ...item }; showForm.value = true
 }
 
+// ===== 保存配置（在线 POST/PUT，离线改数组） =====
 const handleSave = async () => {
   saving.value = true
   try {
@@ -75,6 +95,7 @@ const handleSave = async () => {
   finally { saving.value = false }
 }
 
+// ===== 删除 =====
 const handleDelete = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除？')) return
@@ -84,6 +105,7 @@ const handleDelete = async (id: number, event: Event) => {
   } catch (e) { console.error('删除失败:', e) }
 }
 
+// 策略类型的中文映射 + 颜色
 const strategyLabel = (s: string): string => ({ sliding_window: '滑动窗口', summary: '摘要压缩', hybrid: '混合策略' } as Record<string, string>)[s] || s
 const strategyColor = (s: string): string => ({ sliding_window: '#0284c7', summary: '#16a34a', hybrid: '#7c3aed' } as Record<string, string>)[s] || '#94a3b8'
 
@@ -98,6 +120,7 @@ emit('updateColor', '#7c3aed')
         <button class="new-btn" @click="handleNew">＋ 新建记忆配置</button>
       </div>
 
+      <!-- ===== 记忆配置表单 ===== -->
       <div v-if="showForm" class="config-form">
         <h4>{{ isEditing ? '编辑记忆配置' : '新建记忆配置' }}</h4>
         <div class="form-grid">
@@ -113,12 +136,14 @@ emit('updateColor', '#7c3aed')
           <div class="form-item"><label>摘要最大长度：</label><input type="number" v-model="form.summaryMaxLength" class="styled-input" min="50" max="2000" /></div>
           <div class="form-item"><label>压缩间隔（轮）：</label><input type="number" v-model="form.compressionInterval" class="styled-input" min="1" max="100" /></div>
         </div>
+        <!-- RAG 增强开关 -->
         <div class="toggle-group">
           <div class="toggle-item"><label>启用 RAG：</label>
             <select v-model="form.enableRag" class="styled-input" style="width:auto"><option :value="0">关闭</option><option :value="1">开启</option></select></div>
           <div v-if="form.enableRag === 1" class="form-item" style="flex:1"><label>RAG 集合名称：</label><input type="text" v-model="form.ragCollectionName" class="styled-input" /></div>
           <div v-if="form.enableRag === 1" class="form-item"><label>Top-K：</label><input type="number" v-model="form.ragTopK" class="styled-input" min="1" max="20" style="width:100px" /></div>
         </div>
+        <!-- 长期记忆 / 保留 System Prompt 开关 -->
         <div class="toggle-group">
           <div class="toggle-item"><label>启用长期记忆：</label>
             <select v-model="form.enableLongTermMemory" class="styled-input" style="width:auto"><option :value="0">关闭</option><option :value="1">开启</option></select></div>
@@ -131,12 +156,14 @@ emit('updateColor', '#7c3aed')
         </div>
       </div>
 
+      <!-- ===== 记忆配置卡片列表 ===== -->
       <div class="records-grid">
         <div v-for="item in memories" :key="item.id" class="record-card"
           :class="{ 'is-enabled': item.isEnabled === 1 }"
           :style="{ borderLeft: `6px solid ${item.isEnabled === 1 ? strategyColor(item.strategyType) : '#cbd5e1'}` }">
           <div class="card-info">
             <div class="title-row">
+              <!-- 策略类型徽章 -->
               <span class="strategy-badge" :style="{ backgroundColor: strategyColor(item.strategyType) }">{{ strategyLabel(item.strategyType) }}</span>
               <span v-if="item.isEnabled === 1" class="enabled-tag" :style="{ color: strategyColor(item.strategyType), background: strategyColor(item.strategyType) + '18' }">已启用</span>
               <span class="window-info">窗口: {{ item.windowSize }} | 最大历史: {{ item.maxHistoryMessages }}</span>

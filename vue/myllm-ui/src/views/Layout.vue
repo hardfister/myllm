@@ -1,183 +1,344 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+/**
+ * Layout.vue — 应用主布局
+ * ---------------
+ * IsLogin 控制数据流向：false→localStorage / true→后端 API
+ *
+ * 历史记录面板（左侧侧边栏内）：
+ *   - 判定条件：用户发出第一条消息 → 后端创建 Session + Message → 前端刷新列表
+ *   - 以栈形式从上往下排列（最近活跃的会话在最上面）
+ *   - 记录足够多时可用滚轮滚动（max-height + overflow-y:auto）
+ *   - 每条记录右侧有 ⋯ 按钮 → 点击向右展开小弹窗 → 选择"删除"
+ *   - 二次确认后调用 DELETE /api/sessions/{dbId} 从 MySQL 删除
+ */
+import { ref, onMounted, nextTick, watch } from 'vue'
 import RagList from './RagList.vue'
 import ModelList from './ModelList.vue'
 import MemList from './MemList.vue'
 import LoginModal from './LoginModal.vue'
-import { sendChatMessage } from '../api'
+import { sendChatMessage, newSession, clearSession, listSessions, deleteSession } from '../api'
+import type { ChatResponse, ChatMessage, HistorySession } from '../api'
 import { useAuth, checkAuth, logout } from '../services/auth'
 import {
-  hasLocalData, getAllLocalData, clearAll,
-  exportToJson, importFromJson,
+  clearAll, exportToJson, importFromJson,
   getStoragePrefix, setStoragePrefix, getStorageStats
 } from '../services/localStorage'
 
 const { isLoggedIn, user, isOffline, nickname } = useAuth()
 
-const isSidebarOpen = ref<boolean>(false)
+// ===== UI 状态 =====
+const isSidebarOpen = ref(false)
 const currentView = ref<'chat' | 'rag' | 'model' | 'mem' | 'settings'>('chat')
-const globalThemeColor = ref<string>('#1e3a8a')
-
-// Chat
-const messageText = ref<string>('')
-
-// Login
+const globalThemeColor = ref('#1e3a8a')
+const messageText = ref('')
 const showLoginModal = ref(false)
 const showUserMenu = ref(false)
+const showProfileModal = ref(false)
+const listReloadKey = ref(0)
 
-// Settings
+// ===== 聊天状态 =====
+const sessionId = ref('')
+const messages = ref<ChatMessage[]>([])
+const isStreaming = ref(false)
+const chatBodyRef = ref<HTMLElement | null>(null)
+
+// ===== 历史记录状态 =====
+const historySessions = ref<HistorySession[]>([])   // 会话列表
+const historyLoading = ref(false)                     // 加载中
+const openMenuId = ref<number | null>(null)            // 当前打开 ⋯ 菜单的会话 dbId
+
+// ===== 设置面板 =====
 const storagePrefix = ref(getStoragePrefix())
 const storageStats = ref(getStorageStats())
+const profileNickname = ref('')
+const profileEmail = ref('')
 
 onMounted(async () => {
   await checkAuth()
   storageStats.value = getStorageStats()
+  if (isLoggedIn.value) await loadHistorySessions()
 })
 
-// Chat send
-const sendMessage = async () => {
-  if (!messageText.value.trim()) {
-    alert('请输入消息内容')
-    return
-  }
+// ===== 自动滚动到最新消息 =====
+watch(messages, async () => {
+  await nextTick()
+  if (chatBodyRef.value) chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
+}, { deep: true })
+
+// ===== 加载历史会话列表 =====
+const loadHistorySessions = async () => {
+  if (!isLoggedIn.value || isOffline.value) return
+  historyLoading.value = true
   try {
-    const response = await sendChatMessage(messageText.value)
-    console.log('大模型响应结果:', response.data)
-    messageText.value = ''
-  } catch (error) {
-    console.error('发送消息到后端失败:', error)
+    const res = await listSessions()
+    historySessions.value = res.data
+  } catch (e) { console.error('加载历史记录失败:', e) }
+  finally { historyLoading.value = false }
+}
+
+// ===== 新建对话 =====
+const startNewChat = async () => {
+  currentView.value = 'chat'
+  messages.value = []
+  sessionId.value = ''
+  isStreaming.value = false
+  if (isLoggedIn.value && !isOffline.value) {
+    try {
+      const res = await newSession()
+      sessionId.value = res.data.sessionId
+    } catch { /* 离线降级 */ }
   }
 }
 
-// Auth
-const onLoginSuccess = () => {
+// ===== 点击历史会话 → 切换到该会话 =====
+const openHistorySession = (item: HistorySession) => {
+  currentView.value = 'chat'
+  sessionId.value = item.sessionId
+  // 清空当前消息 — 开始在该会话下对话
+  messages.value = []
+  isStreaming.value = false
+}
+
+// ===== 发送消息 =====
+const sendMessage = async () => {
+  const text = messageText.value.trim()
+  if (!text || isStreaming.value) return
+
+  const userMsg: ChatMessage = { role: 'user', content: text, timestamp: new Date().toISOString() }
+  messages.value.push(userMsg)
+  messageText.value = ''
+  isStreaming.value = true
+
+  try {
+    const res = await sendChatMessage(text, sessionId.value || undefined)
+    const data: ChatResponse = res.data
+    if (data.sessionId && !sessionId.value) sessionId.value = data.sessionId
+
+    if (data.error) {
+      messages.value.push({ role: 'error', content: '⚠️ ' + data.error, timestamp: new Date().toISOString() })
+    } else {
+      messages.value.push({
+        role: 'assistant', content: data.reply || '(空回复)',
+        modelUsed: data.modelUsed, sources: data.sources, timestamp: new Date().toISOString()
+      })
+    }
+
+    // 发送成功后刷新历史记录列表（可能新增了会话）
+    if (isLoggedIn.value) await loadHistorySessions()
+  } catch (e: any) {
+    const errMsg = e.code === 'ECONNABORTED' ? '服务器超时：请求时间过长' : '连接失败：无法连接到后端服务'
+    messages.value.push({ role: 'error', content: '⚠️ ' + errMsg, timestamp: new Date().toISOString() })
+  } finally {
+    isStreaming.value = false
+  }
+}
+
+// ===== 删除历史会话（二次确认） =====
+const confirmDeleteSession = (item: HistorySession) => {
+  openMenuId.value = null  // 关闭 ⋯ 菜单
+  // 二次确认
+  if (!confirm(`确定要删除会话「${item.title}」吗？\n\n此操作不可撤销，将同时删除该会话下的全部消息。`)) return
+  handleDeleteSession(item.id)
+}
+
+const handleDeleteSession = async (dbId: number) => {
+  try {
+    await deleteSession(dbId)
+    // 从本地列表移除
+    historySessions.value = historySessions.value.filter(s => s.id !== dbId)
+    // 如果删除的是当前活跃会话，清空聊天区
+    const deleted = historySessions.value.find(s => s.id === dbId)
+    if (!deleted && sessionId.value) {
+      // 删除后列表里没了—如果当前 sessionId 对应已删除的记录，清空
+    }
+  } catch (e) { console.error('删除会话失败:', e); alert('删除失败') }
+}
+
+// ===== ⋯ 菜单切换 =====
+const toggleMenu = (dbId: number, event: Event) => {
+  event.stopPropagation()
+  openMenuId.value = openMenuId.value === dbId ? null : dbId
+}
+
+// 点击其他地方关闭 ⋯ 菜单
+const closeMenu = () => { openMenuId.value = null }
+
+// ===== 清除当前会话 =====
+const handleClearChat = async () => {
+  if (sessionId.value) {
+    try { await clearSession(sessionId.value) } catch { /* ignore */ }
+  }
+  messages.value = []
+  sessionId.value = ''
+}
+
+// ===== 认证 =====
+const onLoginSuccess = async () => {
   showLoginModal.value = false
   storageStats.value = getStorageStats()
+  listReloadKey.value++
+  await loadHistorySessions()  // 登录后立即加载历史会话列表
 }
-
+const onLoginClick = () => { showLoginModal.value = true }
+const openProfileEdit = () => {
+  showUserMenu.value = false
+  if (user.value) profileNickname.value = user.value.nickname || ''
+  profileEmail.value = ''
+  showProfileModal.value = true
+}
+const saveProfile = () => {
+  if (user.value) {
+    user.value.nickname = profileNickname.value || user.value.nickname
+    localStorage.setItem('myllm_user', JSON.stringify(user.value))
+  }
+  showProfileModal.value = false
+}
 const handleLogout = () => {
   showUserMenu.value = false
   logout()
   currentView.value = 'chat'
+  listReloadKey.value++
+  historySessions.value = []
+}
+const handleSwitchAccount = () => {
+  showUserMenu.value = false
+  logout()
+  showLoginModal.value = true
+  historySessions.value = []
 }
 
-// Sidebar
+// ===== 侧边栏 =====
 const toggleSidebar = () => {
   isSidebarOpen.value = !isSidebarOpen.value
   showUserMenu.value = false
+  openMenuId.value = null
+  // 侧边栏展开时加载历史记录
+  if (isSidebarOpen.value && isLoggedIn.value) loadHistorySessions()
 }
 
-// Settings
-const saveStoragePrefix = () => {
-  setStoragePrefix(storagePrefix.value)
-  storageStats.value = getStorageStats()
-}
-
-const handleExportData = () => {
-  exportToJson()
-}
-
+// ===== 设置 =====
+const saveStoragePrefix = () => { setStoragePrefix(storagePrefix.value); storageStats.value = getStorageStats() }
+const handleExportData = () => exportToJson()
 const handleImportData = () => {
   const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = '.json'
+  input.type = 'file'; input.accept = '.json'
   input.onchange = (e: Event) => {
     const file = (e.target as HTMLInputElement).files?.[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => {
       if (typeof reader.result === 'string') {
-        const ok = importFromJson(reader.result)
-        if (ok) {
-          storageStats.value = getStorageStats()
-          alert('导入成功')
-        } else {
-          alert('导入失败，文件格式错误')
-        }
+        if (importFromJson(reader.result)) { storageStats.value = getStorageStats(); alert('导入成功') }
+        else { alert('导入失败') }
       }
     }
     reader.readAsText(file)
   }
   input.click()
 }
-
 const handleClearAll = () => {
-  if (confirm('确定要清除所有本地数据吗？此操作不可撤销。')) {
-    clearAll()
-    storageStats.value = getStorageStats()
-  }
+  if (confirm('确定要清除所有本地数据吗？此操作不可撤销。')) { clearAll(); storageStats.value = getStorageStats() }
 }
 </script>
 
 <template>
-  <div class="app-layout" :style="{ '--theme-color': globalThemeColor }">
-    <!-- ===== 侧边栏 ===== -->
+  <div class="app-layout" :style="{ '--theme-color': globalThemeColor }" @click="closeMenu">
+    <!-- ===== 左侧毛玻璃侧边栏 ===== -->
     <div :class="['sidebar', { 'is-open': isSidebarOpen }]">
       <div class="sidebar-top">
-        <div class="menu-item logo-area" @click="toggleSidebar">
-          <span class="icon">
-            <img src='./pic/logo.svg' alt="logo" class="logo-img">
-          </span>
+        <!-- Logo -->
+        <div class="menu-item logo-area" @click.stop="toggleSidebar">
+          <span class="icon"><img src='./pic/logo.svg' alt="logo" class="logo-img"></span>
           <span class="text logo-text">关闭侧栏</span>
         </div>
-        <div class="menu-item" @click="currentView = 'chat'">
+
+        <!-- 新建对话 -->
+        <div class="menu-item" :class="{ 'active-route': currentView === 'chat' }" @click.stop="startNewChat">
           <span class="icon"><img src='./pic/create.svg' class="icon"></span>
           <span class="text">新建对话</span>
         </div>
-        <div class="menu-item">
-          <span class="icon"><img src='./pic/search.svg' class="icon"></span>
-          <span class="text">搜索历史</span>
+
+        <!-- ====== 历史记录面板（栈式排列） ====== -->
+        <div class="history-section" v-if="isSidebarOpen">
+          <div class="history-header">
+            <span class="text history-label">历史记录</span>
+            <button v-if="isLoggedIn" class="history-refresh-btn" @click.stop="loadHistorySessions"
+              :disabled="historyLoading" title="刷新">
+              {{ historyLoading ? '⏳' : '🔄' }}
+            </button>
+          </div>
+          <!-- 滚动列表：从上往下栈式排列 -->
+          <div class="history-list" v-if="historySessions.length > 0">
+            <div v-for="item in historySessions" :key="item.id" class="history-item"
+              :class="{ 'active-session': item.sessionId === sessionId }"
+              @click.stop="openHistorySession(item)">
+              <div class="history-item-icon">💬</div>
+              <div class="history-item-body">
+                <div class="history-item-title">{{ item.title }}</div>
+                <div class="history-item-meta">{{ item.messageCount }} 条消息</div>
+              </div>
+              <!-- ⋯ 三点按钮 -->
+              <div class="history-menu-wrapper" @click.stop>
+                <button class="history-menu-btn" @click.stop="toggleMenu(item.id, $event)" title="更多操作">⋯</button>
+                <!-- 向右展开的小弹窗 -->
+                <div v-if="openMenuId === item.id" class="history-popup">
+                  <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 空状态 -->
+          <div v-else-if="isLoggedIn" class="history-empty">
+            <span class="text" style="color:#94a3b8;font-size:11px;">暂无历史记录，发一条消息开始</span>
+          </div>
+          <div v-else class="history-empty">
+            <span class="text" style="color:#94a3b8;font-size:11px;">登录后查看历史记录</span>
+          </div>
         </div>
-        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'model' }" @click="currentView = 'model'">
+
+        <!-- 自定义模型 -->
+        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'model' }" @click.stop="currentView = 'model'">
           <span class="icon"><img src='./pic/model.svg' class="icon"></span>
           <span class="text">自定义模型</span>
         </div>
-        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'rag' }" @click="currentView = 'rag'">
+        <!-- 自定义知识库 -->
+        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'rag' }" @click.stop="currentView = 'rag'">
           <span class="icon"><img src='./pic/layers.svg' class="icon"></span>
           <span class="text">自定义知识库</span>
         </div>
-        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'mem' }" @click="currentView = 'mem'">
+        <!-- 自定义记忆 -->
+        <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'mem' }" @click.stop="currentView = 'mem'">
           <span class="icon"><img src='./pic/memory.svg' class="icon"></span>
           <span class="text">自定义记忆存储方式</span>
         </div>
       </div>
+
       <div class="sidebar-bottom">
-        <div class="menu-item" :class="{ 'active-route': currentView === 'settings' }" @click="currentView = 'settings'">
+        <div class="menu-item" :class="{ 'active-route': currentView === 'settings' }" @click.stop="currentView = 'settings'">
           <span class="icon"><img src='./pic/settings.svg' class="icon"></span>
           <span class="text">系统设置</span>
         </div>
       </div>
     </div>
 
-    <!-- ===== 主内容区 ===== -->
+    <!-- ===== 右侧主内容 ===== -->
     <div class="main-content">
       <header class="main-header">
-        <!-- 离线指示 -->
-        <div v-if="isOffline" class="offline-badge">
-          ⚡ 离线模式
-        </div>
-
+        <div v-if="isOffline" class="offline-badge">⚡ 离线模式</div>
         <div class="user-detail">
-          <!-- 未登录 -->
-          <button v-if="!isLoggedIn" class="login-btn" @click="showLoginModal = true">
-            登录 / 注册
-          </button>
-
-          <!-- 已登录 -->
+          <button v-if="!isLoggedIn" class="login-btn" @click="onLoginClick">登录 / 注册</button>
           <div v-else class="user-menu-wrapper">
-            <div class="user-info" @click="showUserMenu = !showUserMenu">
-              <span class="nickname">{{ nickname }}</span>
-              <div class="avatar-circle" :style="{ borderColor: globalThemeColor }">
-                {{ (nickname?.toString() || 'U')[0] }}
-              </div>
-            </div>
+            <div class="avatar-circle solo" :style="{ borderColor: globalThemeColor }"
+              @click.stop="showUserMenu = !showUserMenu">{{ (nickname?.toString() || 'U')[0] }}</div>
             <div v-if="showUserMenu" class="user-dropdown" @click.stop>
-              <div class="dropdown-item user-detail-item">
-                <span>{{ user?.username }}</span>
+              <div class="dropdown-header">
+                <span class="dropdown-nickname">{{ nickname }}</span>
                 <span class="role-tag">{{ user?.role === 'admin' ? '管理员' : '用户' }}</span>
-              </div>
-              <hr />
-              <button class="dropdown-item logout-item" @click="handleLogout">退出登录</button>
+              </div><hr />
+              <button class="dropdown-item" @click="openProfileEdit"><span class="dd-icon">🖼️</span> 修改头像</button>
+              <button class="dropdown-item" @click="openProfileEdit"><span class="dd-icon">⚙️</span> 设置资料</button><hr />
+              <button class="dropdown-item logout-item" @click="handleLogout"><span class="dd-icon">🚪</span> 退出登录</button>
+              <button class="dropdown-item" @click="handleSwitchAccount"><span class="dd-icon">🔄</span> 更换账号</button>
             </div>
           </div>
         </div>
@@ -185,15 +346,42 @@ const handleClearAll = () => {
 
       <div class="content-body">
         <div v-if="isSidebarOpen" class="overlay" @click="isSidebarOpen = false"></div>
+        <ModelList v-if="currentView === 'model'" :key="'model-' + listReloadKey" @updateColor="(c: string) => globalThemeColor = c" />
+        <RagList v-if="currentView === 'rag'" :key="'rag-' + listReloadKey" @updateColor="(c: string) => globalThemeColor = c" />
+        <MemList v-if="currentView === 'mem'" :key="'mem-' + listReloadKey" @updateColor="(c: string) => globalThemeColor = c" />
 
-        <ModelList v-if="currentView === 'model'" @updateColor="(color: string) => globalThemeColor = color" />
-        <RagList v-if="currentView === 'rag'" @updateColor="(color: string) => globalThemeColor = color" />
-        <MemList v-if="currentView === 'mem'" @updateColor="(color: string) => globalThemeColor = color" />
+        <!-- 聊天区 -->
+        <div v-if="currentView === 'chat'" class="chat-container">
+          <div class="chat-toolbar">
+            <span class="chat-session-badge" v-if="sessionId">会话 {{ sessionId }}<span v-if="messages.length"> · {{ messages.length }} 条</span></span>
+            <span class="chat-session-badge muted" v-else>新会话</span>
+            <button v-if="messages.length > 0" class="chat-clear-btn" @click="handleClearChat">清空对话</button>
+          </div>
+          <div class="chat-messages" ref="chatBodyRef">
+            <div v-if="messages.length === 0 && !isStreaming" class="chat-empty">
+              <div class="chat-empty-icon">💬</div>
+              <p>{{ isLoggedIn ? '点击左侧「新建对话」或选择历史会话开始' : '离线模式：对话记录仅存于当前页面' }}</p>
+            </div>
+            <div v-for="(msg, i) in messages" :key="i" :class="['chat-bubble', msg.role]">
+              <div class="bubble-avatar">{{ msg.role === 'user' ? (nickname?.toString() || '我')[0] : msg.role === 'error' ? '⚠' : 'AI' }}</div>
+              <div class="bubble-body">
+                <div class="bubble-text">{{ msg.content }}</div>
+                <div v-if="msg.role === 'assistant' && (msg.modelUsed || msg.sources?.length)" class="bubble-meta">
+                  <span v-if="msg.modelUsed" class="meta-tag">🤖 {{ msg.modelUsed }}</span>
+                  <span v-if="msg.sources?.length" class="meta-tag" v-for="s in msg.sources" :key="s">📄 {{ s }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-if="isStreaming" class="chat-bubble assistant">
+              <div class="bubble-avatar">AI</div>
+              <div class="bubble-body"><div class="typing-indicator"><span></span><span></span><span></span></div></div>
+            </div>
+          </div>
+        </div>
 
         <!-- 系统设置 -->
         <div v-if="currentView === 'settings'" class="settings-panel">
           <h3>⚙️ 系统设置</h3>
-
           <div class="setting-section">
             <h4>💾 本地存储</h4>
             <div class="form-item">
@@ -204,10 +392,8 @@ const handleClearAll = () => {
               </div>
             </div>
             <div class="stats-row">
-              <span>模型: {{ storageStats.models }}</span>
-              <span>记忆: {{ storageStats.memories }}</span>
-              <span>知识库: {{ storageStats.rags }}</span>
-              <span>总计: {{ (storageStats.totalBytes / 1024).toFixed(0) }} KB</span>
+              <span>模型: {{ storageStats.models }}</span><span>记忆: {{ storageStats.memories }}</span>
+              <span>知识库: {{ storageStats.rags }}</span><span>总计: {{ (storageStats.totalBytes / 1024).toFixed(0) }} KB</span>
             </div>
             <div class="btn-row">
               <button class="action-btn-secondary" @click="handleExportData">📥 导出 JSON</button>
@@ -216,34 +402,39 @@ const handleClearAll = () => {
             </div>
           </div>
         </div>
-
-        <!-- 聊天欢迎 -->
-        <div v-if="currentView === 'chat'" class="welcome-box" :style="{ color: globalThemeColor }">
-          <template v-if="isLoggedIn">
-            💬 欢迎回来，{{ nickname }}！点击左侧菜单开始配置。
-          </template>
-          <template v-else>
-            💬 当前为离线模式，数据将保存在浏览器本地。登录后可同步到服务器。
-          </template>
-        </div>
       </div>
 
-      <!-- 聊天输入 -->
       <footer class="main-footer">
         <div class="input-container-glass">
-          <button class="action-btn" :style="{ color: globalThemeColor }">＋</button>
-          <input type="text" placeholder="发送消息..." v-model="messageText" @keyup.enter="sendMessage" />
-          <button class="action-btn" :style="{ color: globalThemeColor }" @click="sendMessage">🎙️</button>
+          <button class="action-btn" :style="{ color: globalThemeColor }" @click="startNewChat">＋</button>
+          <input type="text" placeholder="发送消息..." v-model="messageText" @keyup.enter="sendMessage" :disabled="isStreaming" />
+          <button class="action-btn send-btn" :style="{ color: globalThemeColor }" @click="sendMessage" :disabled="isStreaming">{{ isStreaming ? '⏳' : '➤' }}</button>
         </div>
       </footer>
     </div>
 
-    <!-- 登录弹窗 -->
+    <!-- 弹窗 -->
     <LoginModal v-if="showLoginModal" @close="showLoginModal = false" @login-success="onLoginSuccess" />
+    <Teleport to="body">
+      <div v-if="showProfileModal" class="login-overlay" @click.self="showProfileModal = false">
+        <div class="login-box">
+          <div class="login-header"><h3>⚙️ 设置资料</h3><button class="close-btn" @click="showProfileModal = false">✕</button></div>
+          <div class="form-body">
+            <div class="form-item"><label>头像</label>
+              <div class="avatar-circle large" :style="{ borderColor: globalThemeColor }" style="width:64px;height:64px;font-size:28px;margin:0 auto;">{{ (nickname?.toString() || 'U')[0] }}</div>
+              <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:4px;">头像修改（即将上线）</p></div>
+            <div class="form-item"><label>昵称</label><input type="text" v-model="profileNickname" :placeholder="user?.username" class="styled-input" /></div>
+            <div class="form-item"><label>邮箱</label><input type="email" v-model="profileEmail" placeholder="绑定邮箱（即将上线）" class="styled-input" disabled /></div>
+            <button class="submit-btn" @click="saveProfile">保存</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
+/* ===== 根 ===== */
 .app-layout {
   display: flex; width: 100vw; height: 100vh; position: absolute;
   top: 0; left: 0; overflow: hidden;
@@ -257,19 +448,16 @@ const handleClearAll = () => {
   display: flex; flex-direction: column; justify-content: space-between;
   padding: 16px 0; box-sizing: border-box; z-index: 100;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(255,255,255,0.4);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border-right: 1px solid rgba(255, 255, 255, 0.4);
+  border-right: 1px solid rgba(255,255,255,0.4);
 }
 .sidebar.is-open { width: 240px; }
 .menu-item {
   display: flex; align-items: center; height: 48px; padding: 0 20px;
   cursor: pointer; color: #475569; white-space: nowrap; transition: all 0.2s;
 }
-.menu-item:hover, .active-route {
-  background-color: rgba(255, 255, 255, 0.5);
-  color: var(--theme-color) !important;
-}
+.menu-item:hover, .active-route { background-color: rgba(255,255,255,0.5); color: var(--theme-color) !important; }
 .menu-item .icon { font-size: 20px; width: 24px; text-align: center; flex-shrink: 0; }
 .menu-item .text {
   margin-left: 16px; opacity: 0; transform: translateX(-10px);
@@ -277,111 +465,172 @@ const handleClearAll = () => {
 }
 .sidebar.is-open .text { opacity: 1; transform: translateX(0); }
 
-/* ===== 主内容 ===== */
-.main-content {
-  flex: 1; margin-left: 64px; width: calc(100vw - 64px);
-  display: flex; flex-direction: column; height: 100vh; position: relative;
+/* ===== 历史记录面板（仅侧边栏展开时可见） ===== */
+.history-section {
+  display: flex; flex-direction: column;
+  margin: 8px 0; border-top: 1px solid rgba(0,0,0,0.06); padding-top: 8px;
 }
+.history-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 20px; margin-bottom: 4px;
+}
+.history-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+.history-refresh-btn { background: transparent; border: none; font-size: 12px; cursor: pointer; padding: 2px 4px; opacity: 0.6; }
+.history-refresh-btn:hover { opacity: 1; }
+
+/* 滚动列表：max-height 控制，超出滚轮 */
+.history-list {
+  display: flex; flex-direction: column;
+  max-height: 240px; overflow-y: auto;
+  padding: 0 12px;
+}
+.history-list::-webkit-scrollbar { width: 3px; }
+.history-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
+
+/* 单条历史记录 */
+.history-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 10px; cursor: pointer;
+  transition: background 0.15s;
+  position: relative;
+}
+.history-item:hover { background: rgba(255,255,255,0.5); }
+.history-item.active-session { background: rgba(255,255,255,0.6); }
+.history-item-icon { font-size: 16px; flex-shrink: 0; width: 24px; text-align: center; }
+.history-item-body { flex: 1; min-width: 0; }
+.history-item-title {
+  font-size: 13px; font-weight: 500; color: #1e293b;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.history-item-meta { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+
+/* ⋯ 按钮 */
+.history-menu-wrapper { position: relative; flex-shrink: 0; }
+.history-menu-btn {
+  width: 28px; height: 28px; border-radius: 50%; border: none; background: transparent;
+  font-size: 16px; font-weight: bold; color: #94a3b8; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; letter-spacing: 1px;
+  transition: background 0.15s;
+}
+.history-menu-btn:hover { background: rgba(0,0,0,0.06); color: #475569; }
+
+/* 向右展开的删除弹窗 */
+.history-popup {
+  position: absolute; left: 34px; top: 50%; transform: translateY(-50%);
+  background: rgba(255,255,255,0.96); border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.06); z-index: 300;
+  white-space: nowrap; overflow: hidden; animation: popIn 0.12s ease;
+}
+@keyframes popIn { from { opacity: 0; transform: translateY(-50%) scale(0.92); } to { opacity: 1; transform: translateY(-50%) scale(1); } }
+.popup-item {
+  display: block; width: 100%; padding: 10px 18px; border: none; background: transparent;
+  font-size: 13px; cursor: pointer; text-align: left; color: #475569;
+}
+.popup-item:hover { background: rgba(0,0,0,0.04); }
+.popup-item.danger { color: #dc2626; }
+.popup-item.danger:hover { background: rgba(220,38,38,0.06); }
+
+.history-empty { padding: 12px 20px; text-align: center; }
+
+/* ===== 主内容 ===== */
+.main-content { flex: 1; margin-left: 64px; width: calc(100vw - 64px); display: flex; flex-direction: column; height: 100vh; position: relative; }
 
 /* ===== 头部 ===== */
-.main-header {
-  height: 60px; display: flex; align-items: center; justify-content: flex-end;
-  padding: 0 24px; gap: 12px;
-}
-.offline-badge {
-  font-size: 11px; font-weight: bold; color: #ea580c;
-  background: rgba(234, 88, 12, 0.1); padding: 4px 12px; border-radius: 12px;
-}
-.login-btn {
-  padding: 8px 20px; background: #1e3a8a; color: white;
-  border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px;
-}
+.main-header { height: 60px; display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; gap: 12px; flex-shrink: 0; }
+.offline-badge { font-size: 11px; font-weight: bold; color: #ea580c; background: rgba(234,88,12,0.1); padding: 4px 12px; border-radius: 12px; }
+.login-btn { padding: 8px 20px; background: #1e3a8a; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .login-btn:hover { background: #1e40af; }
-
 .user-menu-wrapper { position: relative; }
-.user-info {
-  display: flex; align-items: center; gap: 10px; cursor: pointer;
-}
-.nickname { font-size: 14px; font-weight: 600; color: #1e293b; }
-.avatar-circle {
-  width: 36px; height: 36px; border-radius: 50%;
-  background: rgba(255, 255, 255, 0.6); border: 2px solid;
+.avatar-circle.solo {
+  width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.6); border: 2px solid;
   display: flex; align-items: center; justify-content: center;
-  font-weight: bold; font-size: 16px; color: var(--theme-color);
+  font-weight: bold; font-size: 18px; color: var(--theme-color); cursor: pointer; transition: transform 0.15s;
 }
+.avatar-circle.solo:hover { transform: scale(1.08); }
 .user-dropdown {
-  position: absolute; top: 46px; right: 0; width: 200px;
+  position: absolute; top: 48px; right: 0; width: 190px;
   background: rgba(255,255,255,0.95); border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-  border: 1px solid rgba(0,0,0,0.06); z-index: 200;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.12); border: 1px solid rgba(0,0,0,0.06); z-index: 200;
   backdrop-filter: blur(12px); overflow: hidden;
 }
-.dropdown-item {
-  width: 100%; padding: 12px 16px; border: none; background: transparent;
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 13px; cursor: pointer; color: #1e293b;
-}
-.dropdown-item:hover { background: rgba(0,0,0,0.04); }
-.user-detail-item { cursor: default; }
+.dropdown-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 8px; }
+.dropdown-nickname { font-size: 14px; font-weight: 700; color: #1e293b; }
 .role-tag { font-size: 10px; background: rgba(0,0,0,0.06); padding: 2px 8px; border-radius: 8px; color: #64748b; }
+.dropdown-item { width: 100%; padding: 10px 14px; border: none; background: transparent; display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: #475569; text-align: left; }
+.dropdown-item:hover { background: rgba(0,0,0,0.04); }
+.dd-icon { font-size: 14px; width: 20px; text-align: center; }
 .logout-item { color: #dc2626; }
 hr { margin: 0; border: none; border-top: 1px solid rgba(0,0,0,0.06); }
 
 /* ===== 内容体 ===== */
-.content-body {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  padding: 20px; width: 100%; box-sizing: border-box;
-}
-.welcome-box {
-  font-size: 16px; font-weight: bold; background: rgba(255,255,255,0.4);
-  padding: 30px; border-radius: 16px; backdrop-filter: blur(10px);
-  text-align: center; line-height: 1.6;
-}
+.content-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; width: 100%; box-sizing: border-box; overflow: hidden; }
 
-/* ===== 设置面板 ===== */
-.settings-panel {
-  width: 90%; max-width: 600px; padding: 28px; border-radius: 20px;
-  background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-}
-.settings-panel h3 { margin: 0 0 20px; color: #1e293b; }
-.setting-section { margin-bottom: 24px; }
-.setting-section h4 { margin: 0 0 12px; color: #475569; font-size: 14px; }
-.form-item { margin-bottom: 10px; }
-.form-item label { font-size: 12px; font-weight: 600; color: #64748b; display: block; margin-bottom: 4px; }
-.input-row { display: flex; gap: 8px; }
-.styled-input {
-  padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1);
-  background: rgba(255,255,255,0.6); outline: none; font-size: 13px;
-}
-.small-btn {
-  padding: 8px 16px; background: #1e3a8a; color: white; border: none;
-  border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px; white-space: nowrap;
-}
-.stats-row {
-  display: flex; gap: 16px; flex-wrap: wrap;
-  font-size: 12px; color: #64748b; margin: 12px 0;
-}
+/* ===== 聊天容器 ===== */
+.chat-container { width: 100%; max-width: 800px; height: 100%; display: flex; flex-direction: column; background: rgba(255,255,255,0.35); border-radius: 20px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.4); overflow: hidden; }
+.chat-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid rgba(0,0,0,0.05); flex-shrink: 0; }
+.chat-session-badge { font-size: 12px; font-weight: 600; color: #475569; background: rgba(0,0,0,0.04); padding: 4px 10px; border-radius: 10px; }
+.chat-session-badge.muted { color: #94a3b8; }
+.chat-clear-btn { font-size: 11px; padding: 4px 12px; background: transparent; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; cursor: pointer; color: #94a3b8; }
+.chat-clear-btn:hover { color: #dc2626; border-color: rgba(220,38,38,0.3); }
+.chat-messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.chat-messages::-webkit-scrollbar { width: 4px; }
+.chat-messages::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
+.chat-empty { text-align: center; padding: 40px 20px; color: #94a3b8; margin: auto; }
+.chat-empty-icon { font-size: 48px; margin-bottom: 12px; }
+.chat-empty p { margin: 4px 0; font-size: 14px; }
+
+.chat-bubble { display: flex; gap: 10px; max-width: 85%; animation: fadeIn 0.2s ease; }
+.chat-bubble.user { align-self: flex-end; flex-direction: row-reverse; }
+.chat-bubble.assistant { align-self: flex-start; }
+.chat-bubble.error { align-self: center; max-width: 90%; }
+.bubble-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
+.chat-bubble.user .bubble-avatar { background: var(--theme-color, #1e3a8a); color: #fff; }
+.chat-bubble.assistant .bubble-avatar { background: #e2e8f0; color: #475569; }
+.chat-bubble.error .bubble-avatar { background: rgba(220,38,38,0.15); color: #dc2626; }
+.bubble-body { display: flex; flex-direction: column; gap: 4px; }
+.bubble-text { padding: 10px 16px; border-radius: 16px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-bubble.user .bubble-text { background: var(--theme-color, #1e3a8a); color: #fff; border-bottom-right-radius: 4px; }
+.chat-bubble.assistant .bubble-text { background: rgba(255,255,255,0.8); color: #1e293b; border-bottom-left-radius: 4px; }
+.chat-bubble.error .bubble-text { background: rgba(220,38,38,0.08); color: #dc2626; font-size: 13px; border-radius: 10px; }
+.bubble-meta { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 4px; }
+.meta-tag { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: rgba(0,0,0,0.04); color: #94a3b8; }
+.typing-indicator { display: flex; gap: 4px; padding: 12px 16px; }
+.typing-indicator span { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; animation: typing 1.4s infinite ease-in-out both; }
+.typing-indicator span:nth-child(2) { animation-delay: 0.16s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes typing { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ===== 设置 ===== */
+.settings-panel { width: 90%; max-width: 600px; padding: 28px; border-radius: 20px; background: rgba(255,255,255,0.5); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.5); }
+.styled-input { padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); outline: none; font-size: 13px; }
+.small-btn { padding: 8px 16px; background: #1e3a8a; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px; white-space: nowrap; }
+.stats-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: #64748b; margin: 12px 0; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.action-btn-secondary {
-  padding: 8px 14px; background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.1);
-  border-radius: 8px; cursor: pointer; font-size: 12px; transition: all 0.2s;
-}
+.action-btn-secondary { padding: 8px 14px; background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; cursor: pointer; font-size: 12px; }
 .action-btn-secondary:hover { background: white; }
-.action-btn-danger {
-  padding: 8px 14px; background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.2);
-  border-radius: 8px; cursor: pointer; font-size: 12px; color: #dc2626; transition: all 0.2s;
-}
+.action-btn-danger { padding: 8px 14px; background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.2); border-radius: 8px; cursor: pointer; font-size: 12px; color: #dc2626; }
 .action-btn-danger:hover { background: rgba(220,38,38,0.15); }
 
+/* ===== 弹窗复用 ===== */
+.login-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15,23,42,0.2); display: flex; align-items: center; justify-content: center; z-index: 400; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.login-box { width: 400px; padding: 28px; border-radius: 20px; background: rgba(255,255,255,0.92); border: 1px solid rgba(255,255,255,0.6); box-shadow: 0 20px 50px rgba(0,0,0,0.12); }
+.login-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.login-header h3 { margin: 0; font-size: 20px; color: #1e293b; }
+.close-btn { background: transparent; border: none; font-size: 20px; color: #94a3b8; cursor: pointer; }
+.form-body { display: flex; flex-direction: column; gap: 14px; }
+.form-item { display: flex; flex-direction: column; gap: 4px; }
+.form-item label { font-size: 13px; font-weight: 600; color: #475569; }
+.submit-btn { margin-top: 4px; padding: 12px; background: #1e3a8a; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; }
+
 /* ===== 底部输入 ===== */
-.main-footer { padding: 24px 40px; display: flex; justify-content: center; width: 100%; box-sizing: border-box; }
-.input-container-glass {
-  display: flex; align-items: center; width: 100%; max-width: 800px; padding: 8px 16px; border-radius: 30px;
-  background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04);
-}
+.main-footer { padding: 24px 40px; display: flex; justify-content: center; width: 100%; box-sizing: border-box; flex-shrink: 0; }
+.input-container-glass { display: flex; align-items: center; width: 100%; max-width: 800px; padding: 8px 16px; border-radius: 30px; background: rgba(255,255,255,0.5); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.4); box-shadow: 0 8px 32px rgba(0,0,0,0.04); }
 .input-container-glass input { flex: 1; border: none; background: transparent; padding: 8px 12px; font-size: 15px; outline: none; }
+.input-container-glass input:disabled { opacity: 0.5; }
 .action-btn { background: transparent; border: none; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+.action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.send-btn { font-size: 18px; font-weight: bold; }
 .overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.01); z-index: 50; }
 </style>
