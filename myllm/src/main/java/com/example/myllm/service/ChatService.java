@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.net.ConnectException;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
@@ -20,15 +21,19 @@ import java.util.stream.Collectors;
  * 每次请求的完整流水线：
  *   1. 从 DB 加载启用的模型/RAG/记忆配置
  *   2. 构建 System Prompt + RAG 上下文 + 历史裁剪
- *   3. 调用 LLM API
- *   4. 错误分类处理（连接失败/超时/认证失败等）
- *   5. 将用户消息和 AI 回复持久化到 MySQL（Message 表）
- *   6. 首次发消息时自动创建 Session 记录（会话名称取首条消息前 50 字）
+ *   3. 调用 LLM API 获取回复
+ *   4. 新会话：二次调 LLM 用 AI 自动生成会话标题（≤20 字）
+ *   5. 每轮对话实时持久化到 MySQL（Session + Message）
+ *   6. 实时更新会话的 updated_at 时间戳（确保历史列表排序准确）
+ *   7. 错误分类处理（连接失败/超时/认证失败等）
  *
- * 历史记录：
- *   - 判定条件：用户发出第一条消息，后端立刻在 DB 创建 Session + Message
- *   - 会话列表按 updated_at 倒序排列（最近活跃的会话排最前）
- *   - 删除会话时级联删除其下的所有 Message 记录
+ * 标题生成：
+ *   - 用户新建会话并发第一条消息 → LLM 回复后 → 再调一次 LLM 用简短 prompt 生成 ≤20 字标题
+ *   - 标题异步保存到 Session.title，前端历史面板实时显示
+ *
+ * 实时记录：
+ *   - 每条用户消息 + AI 回复立刻保存为一条 Message 记录
+ *   - 每次保存同时更新 Session.updatedAt，确保历史列表按最近活跃排序
  */
 @Service
 public class ChatService {
@@ -36,10 +41,9 @@ public class ChatService {
     private final ModelConfigRepository modelConfigRepo;
     private final RagRepository ragRepo;
     private final MemoryConfigRepository memoryRepo;
-    private final SessionRepository sessionRepo;      // 新增：会话持久化
-    private final MessageRepository messageRepo;      // 新增：消息持久化
+    private final SessionRepository sessionRepo;
+    private final MessageRepository messageRepo;
 
-    /** 内存会话存储：sessionId → 历史消息列表（用于运行时快速访问和记忆裁剪） */
     private final Map<String, List<Map<String, String>>> sessions = new ConcurrentHashMap<>();
 
     public ChatService(ModelConfigRepository modelConfigRepo,
@@ -56,16 +60,18 @@ public class ChatService {
 
     /**
      * 处理一轮对话
-     * @param userMessage 用户输入
-     * @param sessionId   会话 ID（null 则新建）
-     * @return ChatResponse（包含 AI 回复 + sessionId + 错误信息 + 来源）
+     * 注意：不标注 @Transactional — 外部 HTTP 调用（LLM）不应在事务中运行，
+     * 耗时可达数十秒，持有事务会导致连接池耗尽。DB 写操作由 persistSessionAndMessage
+     * 和 updateSessionTitle 内部自管理事务。
      */
-    @Transactional
     public ChatResponse chat(String userMessage, String sessionId) {
-        // 1. 获取或创建会话 ID
-        boolean isNewSession = (sessionId == null || sessionId.isBlank());
-        if (isNewSession) {
+        // 1. 获取或创建会话 ID — 以 DB 是否存在为准（不信任前端的 isNew 标记）
+        boolean dbSessionExists = false;
+        if (sessionId == null || sessionId.isBlank()) {
             sessionId = UUID.randomUUID().toString().substring(0, 8);
+        } else {
+            // 检查这个 sessionId 在 DB 中是否已有 Session 记录
+            dbSessionExists = (sessionRepo.findBySessionName(sessionId) != null);
         }
 
         // 2. 加载启用的模型配置
@@ -73,17 +79,15 @@ public class ChatService {
         ModelConfig activeModel = models.stream()
                 .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
                 .findFirst().orElse(null);
-
         if (activeModel == null) {
-            return ChatResponse.error("没有启用的模型配置，请先在「自定义模型」中配置并激活一个模型", sessionId);
+            return ChatResponse.error("没有启用的模型配置", sessionId);
         }
 
-        // 3. 加载启用的 RAG 知识库文档，拼接上下文
+        // 3. 加载启用的 RAG 文档，拼接为上下文
         List<Rag> enabledRags = ragRepo.findAllByOrderByCreatedAtDesc().stream()
                 .filter(r -> r.getIsEnabled() != null && r.getIsEnabled() == 1)
                 .collect(Collectors.toList());
-        List<String> sources = enabledRags.stream()
-                .map(Rag::getFilename).collect(Collectors.toList());
+        List<String> sources = enabledRags.stream().map(Rag::getFilename).collect(Collectors.toList());
 
         StringBuilder ragContext = new StringBuilder();
         for (Rag rag : enabledRags) {
@@ -98,81 +102,95 @@ public class ChatService {
                 .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
                 .findFirst().orElse(null);
 
-        // 5. 构建 System Prompt
-        String systemPrompt = buildSystemPrompt(activeModel, ragContext.toString());
-
-        // 6. 获取历史消息并裁剪
+        // 5. 获取内存中的历史消息并裁剪（对话记忆）
         List<Map<String, String>> history = getOrCreateHistory(sessionId);
         List<Map<String, String>> contextMessages = applyMemoryStrategy(history, activeMemory);
 
-        // 7. 构建 LLM 实例
-        OpenAiChatModel model;
-        try {
-            String baseUrl = activeModel.getBaseUrl();
-            if (baseUrl == null || baseUrl.isBlank()) baseUrl = "https://api.deepseek.com/v1";
-            String apiKey = activeModel.getApiKeyEncrypted();
-            if (apiKey == null || apiKey.isBlank())
-                return ChatResponse.error("模型「" + activeModel.getModelName() + "」未配置 API Key", sessionId);
-            String modelName = activeModel.getModelName();
-            if (modelName == null || modelName.isBlank()) modelName = "deepseek-chat";
-            int maxTokens = activeModel.getMaxTokens() != null ? activeModel.getMaxTokens() : 4096;
-
-            model = OpenAiChatModel.builder()
-                    .baseUrl(baseUrl).apiKey(apiKey).modelName(modelName)
-                    .temperature(0.7).maxTokens(maxTokens)
-                    .timeout(Duration.ofSeconds(120)).build();
-        } catch (Exception e) {
-            return ChatResponse.error("模型初始化失败: " + e.getMessage(), sessionId);
+        // 6. 拼装对话历史文本（注入 LLM 调用实现记忆）
+        StringBuilder historyText = new StringBuilder();
+        if (!contextMessages.isEmpty()) {
+            for (Map<String, String> msg : contextMessages) {
+                historyText.append(msg.get("role")).append(": ").append(msg.get("content")).append("\n");
+            }
+            historyText.append("\n"); // 空行分隔历史和当前问题
         }
 
-        // 8. 调用 LLM
+        // 7. 构建完整 System Prompt = 模型 prompt + RAG 上下文
+        String systemPrompt = buildSystemPrompt(activeModel, ragContext.toString());
+
+        // 8. 构建 LLM 实例
+        String baseUrl = activeModel.getBaseUrl() != null && !activeModel.getBaseUrl().isBlank()
+                ? activeModel.getBaseUrl() : "https://api.deepseek.com";
+        String apiKey = activeModel.getApiKeyEncrypted();
+        if (apiKey == null || apiKey.isBlank())
+            return ChatResponse.error("模型「" + activeModel.getModelName() + "」未配置 API Key", sessionId);
+        String modelName = activeModel.getModelName() != null && !activeModel.getModelName().isBlank()
+                ? activeModel.getModelName() : "deepseek-v4-flash";
+        int maxTokens = activeModel.getMaxTokens() != null ? activeModel.getMaxTokens() : 4096;
+
+        OpenAiChatModel model = OpenAiChatModel.builder()
+                .baseUrl(baseUrl).apiKey(apiKey).modelName(modelName)
+                .temperature(0.7).maxTokens(maxTokens)
+                .timeout(Duration.ofSeconds(120)).build();
+
+        // 9. 调用 LLM — 传入历史上下文实现对话记忆
+        //    当前消息 = 历史对话文本 + 用户新消息
+        String fullPrompt = historyText.length() > 0
+                ? historyText + "user: " + userMessage
+                : userMessage;
+
         String aiReply;
         try {
             if (systemPrompt != null && !systemPrompt.isBlank()) {
                 aiReply = model.generate(
                     dev.langchain4j.data.message.SystemMessage.from(systemPrompt),
-                    dev.langchain4j.data.message.UserMessage.from(userMessage)
+                    dev.langchain4j.data.message.UserMessage.from(fullPrompt)
                 ).content().text();
             } else {
-                aiReply = model.generate(userMessage);
+                aiReply = model.generate(fullPrompt);
             }
-
-            System.out.println("[" + sessionId + "] 模型: " + activeModel.getModelName()
+            System.out.println("[" + sessionId + "] 模型: " + modelName
+                    + " | 历史轮数: " + (contextMessages.size() / 2)
                     + " | 来源: " + sources + " | 回复长度: " + (aiReply != null ? aiReply.length() : 0));
-
         } catch (Exception e) {
             String errorMsg = classifyError(e);
-            System.err.println("[" + sessionId + "] LLM 调用失败: " + errorMsg + " — " + e.getMessage());
+            System.err.println("[" + sessionId + "] LLM 调用失败: " + errorMsg);
             return ChatResponse.error(errorMsg, sessionId);
         }
 
-        // 9. 保存到内存历史
+        // 10. 保存到内存历史（实现后续对话记忆的关键）
         history.add(Map.of("role", "user", "content", userMessage));
         history.add(Map.of("role", "assistant", "content", aiReply != null ? aiReply : ""));
 
-        // 10. 持久化会话和消息到 MySQL
-        persistSessionAndMessage(sessionId, isNewSession, userMessage, aiReply,
-                activeModel, activeMemory, enabledRags.isEmpty() ? null : enabledRags.get(0));
+        // 11. 持久化到 MySQL（以 DB 实际情况判断是否新会话，比前端标记可靠）
+        Rag firstRag = enabledRags.isEmpty() ? null : enabledRags.get(0);
+        Long sessionDbId = persistSessionAndMessage(
+                sessionId, !dbSessionExists, userMessage, aiReply,
+                activeModel, activeMemory, firstRag, model);
+
+        // 12. 新会话：AI 自动生成标题
+        if (!dbSessionExists && sessionDbId != null) {
+            String aiTitle = generateSessionTitle(model, userMessage, aiReply);
+            if (aiTitle != null) {
+                updateSessionTitle(sessionDbId, aiTitle);
+            }
+        }
 
         return ChatResponse.ok(aiReply, sessionId, sources, activeModel.getModelName());
     }
 
-
     // ==================== 历史记录 API ====================
 
-    /**
-     * 获取所有会话列表（用于前端侧边栏历史记录面板）
-     * 返回格式适合前端渲染：sessionId, sessionName, messageCount, updatedAt
-     */
+    /** 获取所有会话列表 */
     public List<Map<String, Object>> listSessions() {
-        List<Session> sessions = sessionRepo.findAllByOrderByUpdatedAtDesc();
+        List<Session> all = sessionRepo.findAllByOrderByUpdatedAtDesc();
         List<Map<String, Object>> result = new ArrayList<>();
-        for (Session s : sessions) {
+        for (Session s : all) {
             int count = messageRepo.countBySessionId(s.getId());
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", s.getId());
-            item.put("sessionId", s.getSessionName());  // 短 UUID，前端用于关联消息
-            item.put("title", s.getTitle() != null ? s.getTitle() : s.getSessionName());  // 会话显示标题
+            item.put("sessionId", s.getSessionName());
+            item.put("title", s.getTitle() != null ? s.getTitle() : s.getSessionName());
             item.put("messageCount", count);
             item.put("updatedAt", s.getUpdatedAt() != null ? s.getUpdatedAt().toString() : null);
             result.add(item);
@@ -180,15 +198,10 @@ public class ChatService {
         return result;
     }
 
-    /**
-     * 删除会话及其全部消息
-     * @param dbSessionId Session 表的主键 id
-     */
+    /** 删除会话及其全部消息 */
     @Transactional
     public void deleteSession(Long dbSessionId) {
-        // 级联删除消息
         messageRepo.deleteBySessionId(dbSessionId);
-        // 删除会话
         sessionRepo.deleteById(dbSessionId);
     }
 
@@ -197,9 +210,7 @@ public class ChatService {
     /** 构建 System Prompt */
     private String buildSystemPrompt(ModelConfig model, String ragContext) {
         StringBuilder sb = new StringBuilder();
-        if (model.getPrompt() != null && !model.getPrompt().isBlank()) {
-            sb.append(model.getPrompt());
-        }
+        if (model.getPrompt() != null && !model.getPrompt().isBlank()) sb.append(model.getPrompt());
         if (!ragContext.isEmpty()) {
             if (sb.length() > 0) sb.append("\n\n");
             sb.append("【参考知识库内容】\n").append(ragContext);
@@ -207,14 +218,11 @@ public class ChatService {
         return sb.toString();
     }
 
-    /** 获取或创建内存中的会话历史 */
     private List<Map<String, String>> getOrCreateHistory(String sessionId) {
         return sessions.computeIfAbsent(sessionId, k -> new ArrayList<>());
     }
 
-    /** 记忆策略裁剪 */
-    private List<Map<String, String>> applyMemoryStrategy(
-            List<Map<String, String>> history, MemoryConfig mem) {
+    private List<Map<String, String>> applyMemoryStrategy(List<Map<String, String>> history, MemoryConfig mem) {
         int windowSize = (mem != null && mem.getWindowSize() != null) ? mem.getWindowSize() : 10;
         int maxMessages = windowSize * 2;
         if (history.size() <= maxMessages) return new ArrayList<>(history);
@@ -222,64 +230,103 @@ public class ChatService {
     }
 
     /**
-     * 将用户消息和 AI 回复持久化到 MySQL
-     * - 新建会话时创建 Session 记录（sessionName 取自首条消息前 50 字）
-     * - 每次回复创建一条 Message 记录（user_message + ai_response）
+     * 持久化会话和消息到 MySQL
+     * - 新会话：创建 Session 记录 + 保存首条 Message
+     * - 已有会话：追加 Message + 更新 Session.updatedAt
+     * @return Session 的数据库主键 ID（新会话用于后续标题更新）
      */
-    private void persistSessionAndMessage(String sessionId, boolean isNew,
-                                          String userMsg, String aiReply,
-                                          ModelConfig model, MemoryConfig mem, Rag rag) {
+    private Long persistSessionAndMessage(String sessionId, boolean isNew,
+                                           String userMsg, String aiReply,
+                                           ModelConfig model, MemoryConfig mem, Rag rag,
+                                           OpenAiChatModel unused) {
         try {
-            // 查找或创建 Session 记录
-            Session session = sessionRepo.findBySessionName(sessionId);
-            if (session == null && isNew) {
+            Session session;
+            if (isNew) {
+                // 新建 Session 记录，标题先用占位符（AI 会在 chat() 返回前异步替换）
                 session = new Session();
                 session.setSessionName(sessionId);
-                // 会话标题取用户首条消息的前 50 个字符
-                String title = userMsg.length() > 50 ? userMsg.substring(0, 50) + "..." : userMsg;
-                session.setTitle(title);
+                session.setTitle("新对话");  // 临时占位，等 AI 生成后覆盖
                 session.setModelId(model != null ? model.getId() : null);
                 session.setMemoryId(mem != null ? mem.getId() : null);
                 session.setRagId(rag != null ? rag.getId() : null);
                 session = sessionRepo.save(session);
-            } else if (session != null) {
-                // 已有会话：更新 updated_at 时间戳
-                session.setUpdatedAt(null); // 触发 @PreUpdate
-                sessionRepo.save(session);
+            } else {
+                // 已有会话：直接更新 updatedAt（触发 @PreUpdate）
+                session = sessionRepo.findBySessionName(sessionId);
+                if (session != null) {
+                    session.setUpdatedAt(LocalDateTime.now());
+                    sessionRepo.save(session);
+                }
             }
 
             if (session != null) {
-                // 保存消息
+                // 每次对话都实时保存一条 Message 记录
                 Message msg = new Message();
                 msg.setSessionId(session.getId());
                 msg.setUserMessage(userMsg);
                 msg.setAiResponse(aiReply);
                 msg.setTokensUsed(estimateTokens(userMsg, aiReply));
                 messageRepo.save(msg);
+                return session.getId();
             }
         } catch (Exception e) {
-            System.err.println("[DB] 持久化消息失败: " + e.getMessage());
+            System.err.println("[DB] 持久化失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * AI 自动生成会话标题（新会话首次对话后调用）
+     * 调用同一个 LLM，用极简 prompt 让模型把首轮对话总结为 ≤20 字的标题
+     * @return 生成的标题，失败返回 null
+     */
+    private String generateSessionTitle(OpenAiChatModel model, String userMsg, String aiReply) {
+        try {
+            // 截取首轮对话的关键内容（限制长度以降低 token 消耗）
+            String shortUser = userMsg.length() > 200 ? userMsg.substring(0, 200) : userMsg;
+            String shortAi = aiReply != null && aiReply.length() > 200 ? aiReply.substring(0, 200) : aiReply;
+            String titlePrompt = "请用不超过20个字简短总结以下对话的主题，只输出标题本身，不要引号、不要解释。\n\n"
+                    + "用户: " + shortUser + "\nAI: " + (shortAi != null ? shortAi : "");
+
+            String title = model.generate(titlePrompt);
+            if (title != null) {
+                title = title.trim().replaceAll("^[\"'「]|[\"'」]$", "");  // 去掉可能的引号
+                if (title.length() > 30) title = title.substring(0, 30);   // 硬截断保底
+                System.out.println("[标题生成] 用户首条 → AI 标题: " + title);
+                return title;
+            }
+        } catch (Exception e) {
+            System.err.println("[标题生成] 失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /** 异步更新 Session 标题（AI 生成标题后调用） */
+    private void updateSessionTitle(Long sessionDbId, String title) {
+        try {
+            sessionRepo.findById(sessionDbId).ifPresent(s -> {
+                s.setTitle(title);
+                sessionRepo.save(s);
+            });
+        } catch (Exception e) {
+            System.err.println("[标题更新] 失败: " + e.getMessage());
         }
     }
 
-    /** 估算 Token 消耗（粗略：中英文混合，约 2 字符 = 1 token） */
     private int estimateTokens(String user, String ai) {
-        int total = 0;
-        if (user != null) total += user.length();
-        if (ai != null) total += ai.length();
+        int total = (user != null ? user.length() : 0) + (ai != null ? ai.length() : 0);
         return Math.max(1, total / 2);
     }
 
-    /** 错误分类 */
     private String classifyError(Exception e) {
         Throwable cause = e;
         while (cause != null) {
             if (cause instanceof ConnectException
                     || (cause.getMessage() != null && cause.getMessage().contains("Connection refused")))
-                return "连接失败：无法连接到模型服务器，请检查 Base URL 和网络";
+                return "连接失败：无法连接到模型服务器";
             if (cause instanceof TimeoutException
                     || (cause.getMessage() != null && cause.getMessage().contains("timeout")))
-                return "服务器超时：模型响应时间过长，请稍后重试或增大超时限制";
+                return "服务器超时：模型响应时间过长";
             if (cause.getMessage() != null && cause.getMessage().contains("401"))
                 return "认证失败：API Key 无效或已过期";
             if (cause.getMessage() != null && cause.getMessage().contains("429"))
@@ -289,7 +336,6 @@ public class ChatService {
         return "大模型调用失败: " + e.getMessage();
     }
 
-    /** 清除内存中的会话 */
     public void clearSession(String sessionId) {
         sessions.remove(sessionId);
     }

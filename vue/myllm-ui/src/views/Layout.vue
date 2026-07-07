@@ -77,17 +77,14 @@ const loadHistorySessions = async () => {
 }
 
 // ===== 新建对话 =====
-const startNewChat = async () => {
+// 不调 newSession() — 后端在发第一条消息时自动创建 Session
+const startNewChat = () => {
   currentView.value = 'chat'
   messages.value = []
   sessionId.value = ''
   isStreaming.value = false
-  if (isLoggedIn.value && !isOffline.value) {
-    try {
-      const res = await newSession()
-      sessionId.value = res.data.sessionId
-    } catch { /* 离线降级 */ }
-  }
+  // 刷新历史列表（可能刚删除过会话）
+  if (isLoggedIn.value) loadHistorySessions()
 }
 
 // ===== 点击历史会话 → 切换到该会话 =====
@@ -126,7 +123,23 @@ const sendMessage = async () => {
     // 发送成功后刷新历史记录列表（可能新增了会话）
     if (isLoggedIn.value) await loadHistorySessions()
   } catch (e: any) {
-    const errMsg = e.code === 'ECONNABORTED' ? '服务器超时：请求时间过长' : '连接失败：无法连接到后端服务'
+    // 精确错误分类 — 不把所有异常都报成"连接失败"
+    let errMsg: string
+    if (e.code === 'ECONNABORTED') {
+      errMsg = '服务器超时：请求时间过长，请稍后重试'
+    } else if (e.response) {
+      // 后端返回了 HTTP 错误响应（401/500 等）
+      const status = e.response.status
+      const backendMsg = e.response.data?.error || e.response.data?.message || ''
+      if (status === 401) errMsg = '认证失败：登录已过期，请重新登录'
+      else if (status === 403) errMsg = '权限不足：' + (backendMsg || '无权访问此接口')
+      else if (status >= 500) errMsg = '服务器内部错误：' + (backendMsg || '请查看后端日志')
+      else errMsg = '请求失败 (HTTP ' + status + ')：' + (backendMsg || e.message)
+    } else if (e.message === 'Network Error' || !e.response) {
+      errMsg = '连接失败：无法连接到后端服务，请确认后端已启动在 localhost:8080'
+    } else {
+      errMsg = '请求异常：' + e.message
+    }
     messages.value.push({ role: 'error', content: '⚠️ ' + errMsg, timestamp: new Date().toISOString() })
   } finally {
     isStreaming.value = false
@@ -258,44 +271,6 @@ const handleClearAll = () => {
           <span class="text">新建对话</span>
         </div>
 
-        <!-- ====== 历史记录面板（栈式排列） ====== -->
-        <div class="history-section" v-if="isSidebarOpen">
-          <div class="history-header">
-            <span class="text history-label">历史记录</span>
-            <button v-if="isLoggedIn" class="history-refresh-btn" @click.stop="loadHistorySessions"
-              :disabled="historyLoading" title="刷新">
-              {{ historyLoading ? '⏳' : '🔄' }}
-            </button>
-          </div>
-          <!-- 滚动列表：从上往下栈式排列 -->
-          <div class="history-list" v-if="historySessions.length > 0">
-            <div v-for="item in historySessions" :key="item.id" class="history-item"
-              :class="{ 'active-session': item.sessionId === sessionId }"
-              @click.stop="openHistorySession(item)">
-              <div class="history-item-icon">💬</div>
-              <div class="history-item-body">
-                <div class="history-item-title">{{ item.title }}</div>
-                <div class="history-item-meta">{{ item.messageCount }} 条消息</div>
-              </div>
-              <!-- ⋯ 三点按钮 -->
-              <div class="history-menu-wrapper" @click.stop>
-                <button class="history-menu-btn" @click.stop="toggleMenu(item.id, $event)" title="更多操作">⋯</button>
-                <!-- 向右展开的小弹窗 -->
-                <div v-if="openMenuId === item.id" class="history-popup">
-                  <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- 空状态 -->
-          <div v-else-if="isLoggedIn" class="history-empty">
-            <span class="text" style="color:#94a3b8;font-size:11px;">暂无历史记录，发一条消息开始</span>
-          </div>
-          <div v-else class="history-empty">
-            <span class="text" style="color:#94a3b8;font-size:11px;">登录后查看历史记录</span>
-          </div>
-        </div>
-
         <!-- 自定义模型 -->
         <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'model' }" @click.stop="currentView = 'model'">
           <span class="icon"><img src='./pic/model.svg' class="icon"></span>
@@ -310,6 +285,40 @@ const handleClearAll = () => {
         <div class="menu-item prompt-lib" :class="{ 'active-route': currentView === 'mem' }" @click.stop="currentView = 'mem'">
           <span class="icon"><img src='./pic/memory.svg' class="icon"></span>
           <span class="text">自定义记忆存储方式</span>
+        </div>
+
+        <!-- ====== 历史记录面板（位于记忆配置下方，栈式排列） ====== -->
+        <div class="history-section" v-if="isSidebarOpen">
+          <div class="history-header">
+            <span class="text history-label">历史记录</span>
+            <button v-if="isLoggedIn" class="history-refresh-btn" @click.stop="loadHistorySessions"
+              :disabled="historyLoading" title="刷新">
+              {{ historyLoading ? '⏳' : '🔄' }}
+            </button>
+          </div>
+          <div class="history-list" v-if="historySessions.length > 0">
+            <div v-for="item in historySessions" :key="item.id" class="history-item"
+              :class="{ 'active-session': item.sessionId === sessionId }"
+              @click.stop="openHistorySession(item)">
+              <div class="history-item-icon">💬</div>
+              <div class="history-item-body">
+                <div class="history-item-title">{{ item.title }}</div>
+                <div class="history-item-meta">{{ item.messageCount }} 条消息</div>
+              </div>
+              <div class="history-menu-wrapper" @click.stop>
+                <button class="history-menu-btn" @click.stop="toggleMenu(item.id, $event)" title="更多操作">⋯</button>
+                <div v-if="openMenuId === item.id" class="history-popup">
+                  <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="isLoggedIn" class="history-empty">
+            <span class="text" style="color:#94a3b8;font-size:11px;">暂无历史记录</span>
+          </div>
+          <div v-else class="history-empty">
+            <span class="text" style="color:#94a3b8;font-size:11px;">登录后查看历史记录</span>
+          </div>
         </div>
       </div>
 

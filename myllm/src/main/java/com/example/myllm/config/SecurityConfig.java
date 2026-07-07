@@ -40,6 +40,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/chat/**").permitAll()
+                .requestMatchers("/api/chat").permitAll()
+                .requestMatchers("/api/sessions/**").permitAll()
+                .requestMatchers("/api/sessions").permitAll()
                 .requestMatchers("/api/models/**").authenticated()
                 .requestMatchers("/api/rags/**").authenticated()
                 .requestMatchers("/api/memories/**").authenticated()

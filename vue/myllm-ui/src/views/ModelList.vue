@@ -35,8 +35,16 @@ const activePresetId = ref<number | null>(null)  // 当前激活的配置 ID
 
 // ===== 数据 =====
 const models = ref<ModelConfig[]>([])        // 模型列表（来自 API 或 localStorage）
-// 前端扩展元数据：每个模型配置的显示标题和主题色（不持久化到 DB，仅内存中）
-const frontendMeta = ref<Record<number, { title: string; color: string }>>({})
+// 前端扩展元数据：标题和主题色不存 DB，改为持久化到 localStorage 的 key "myllm_meta_models"
+const META_KEY = 'myllm_meta_models'
+const loadMeta = (): Record<number, { title: string; color: string }> => {
+  try { const raw = localStorage.getItem(META_KEY); return raw ? JSON.parse(raw) : {} }
+  catch { return {} }
+}
+const saveMeta = (meta: Record<number, { title: string; color: string }>) => {
+  localStorage.setItem(META_KEY, JSON.stringify(meta))
+}
+const frontendMeta = ref<Record<number, { title: string; color: string }>>(loadMeta())
 
 /** 判断是否使用服务器模式（已登录 + 有网络） */
 const useServer = () => isLoggedIn.value && !isOffline.value
@@ -73,14 +81,17 @@ const loadModelsData = async () => {
   }
 
   // 为没有 meta 的模型初始化默认的标题和颜色
+  let metaChanged = false
   for (const m of models.value) {
     if (m.id != null && !frontendMeta.value[m.id]) {
       frontendMeta.value[m.id] = {
         title: `${m.provider} - ${m.modelName}`,
         color: '#1e3a8a'
       }
+      metaChanged = true
     }
   }
+  if (metaChanged) saveMeta(frontendMeta.value)  // 新模型初始化后持久化
   // 自动选中第一个启用的模型
   if (activePresetId.value == null && models.value.length > 0) {
     const active = models.value.find(m => m.isEnabled === 1)
@@ -203,12 +214,13 @@ const saveFinalConfig = async (finalData: { title: string; color: string; maxTok
       persistModels()
     }
 
-    // 更新前端 meta（标题/颜色）
+    // 更新前端 meta（标题/颜色）并持久化到 localStorage
     if (currentConfig.value.id != null) {
       frontendMeta.value[currentConfig.value.id] = {
         title: currentConfig.value.title || payload.modelName,
         color: currentConfig.value.color
       }
+      saveMeta(frontendMeta.value)  // 每次编辑/新建都持久化
     }
     emit('updateColor', currentConfig.value.color)
     step.value = 'list'  // 回到列表
@@ -231,6 +243,7 @@ const handleDeleteConfig = async (id: number, event: Event) => {
       persistModels()
     }
     delete frontendMeta.value[id]
+    saveMeta(frontendMeta.value)  // 删除后同步持久化
     if (activePresetId.value === id) activePresetId.value = null
   } catch (e) { console.error('删除失败:', e) }
 }
