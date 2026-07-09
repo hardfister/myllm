@@ -197,29 +197,32 @@ public class ChatService {
         history.add(Map.of("role", "user", "content", userMessage));
         history.add(Map.of("role", "assistant", "content", aiReply != null ? aiReply : ""));
 
-        // 11. 持久化到 MySQL — 异常不阻断聊天回复
+        // 11. 持久化到 MySQL — 异步线程执行，失败也不阻断聊天回复
         Rag firstRag = enabledRags.isEmpty() ? null : enabledRags.get(0);
-        Long sessionDbId = null;
-        try {
-            sessionDbId = persistenceService.saveSessionAndMessage(
-                    sessionId, !dbSessionExists, userMessage, aiReply,
-                    activeModel, activeMemory, firstRag);
-        } catch (Exception e) {
-            System.err.println("[DB] 持久化异常: " + e.getMessage());
-            e.printStackTrace();
-        }
+        final String finalSessionId = sessionId;
+        final boolean finalIsNew = !dbSessionExists;
+        final String finalUserMsg = userMessage;
+        final String finalAiReply = aiReply;
+        final ModelConfig finalModel = activeModel;
+        final MemoryConfig finalMem = activeMemory;
+        final Rag finalRag = firstRag;
+        final OpenAiChatModel finalLlmModel = model;
 
-        // 12. 新会话：AI 自动生成标题
-        if (!dbSessionExists && sessionDbId != null) {
+        new Thread(() -> {
             try {
-                String aiTitle = generateSessionTitle(model, userMessage, aiReply);
-                if (aiTitle != null) {
-                    persistenceService.updateTitle(sessionDbId, aiTitle);
+                Long dbId = persistenceService.saveSessionAndMessage(
+                        finalSessionId, finalIsNew, finalUserMsg, finalAiReply,
+                        finalModel, finalMem, finalRag);
+                if (finalIsNew && dbId != null) {
+                    String title = generateSessionTitle(finalLlmModel, finalUserMsg, finalAiReply);
+                    if (title != null) {
+                        persistenceService.updateTitle(dbId, title);
+                    }
                 }
             } catch (Exception e) {
-                System.err.println("[标题] 生成/更新异常: " + e.getMessage());
+                System.err.println("[DB] 异步持久化异常: " + e.getMessage());
             }
-        }
+        }, "db-persist-" + finalSessionId).start();
 
         return ChatResponse.ok(aiReply, sessionId, sources, activeModel.getModelName());
     }
