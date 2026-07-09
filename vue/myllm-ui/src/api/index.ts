@@ -61,6 +61,8 @@ export interface ModelConfig {
   maxTokens: number
   prompt: string
   isEnabled?: number
+  displayName?: string
+  sortOrder?: number
   createdAt?: string
   updatedAt?: string
 }
@@ -130,12 +132,21 @@ export interface SyncData {
   rags: Rag[]
 }
 
+/** 多模型模式下单条模型的回复 */
+export interface ChatReply {
+  model: string
+  displayName: string
+  content: string
+}
+
 export interface ChatResponse {
   reply: string | null
   sessionId: string
   error: string | null
   sources: string[]
   modelUsed: string
+  /** 多模型模式 — 所有模型按顺序的回复列表 */
+  replies?: ChatReply[]
 }
 
 /** 后端返回的每条消息记录 */
@@ -196,8 +207,11 @@ export function updateModel(id: number, data: Partial<ModelConfig>): Promise<{ d
 export function deleteModel(id: number): Promise<{ data: string }> {
   return api.delete(`/api/models/${id}`)
 }
-export function activateModel(id: number): Promise<{ data: ModelConfig }> {
-  return api.put(`/api/models/${id}/activate`)
+export function toggleModel(id: number): Promise<{ data: ModelConfig }> {
+  return api.put(`/api/models/${id}/toggle`)
+}
+export function reorderModels(items: { id: number; sortOrder: number }[]): Promise<{ data: string }> {
+  return api.put('/api/models/reorder', items)
 }
 
 // ==================== 记忆配置 CRUD ====================

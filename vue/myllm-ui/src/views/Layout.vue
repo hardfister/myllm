@@ -127,6 +127,17 @@ const sendMessage = async () => {
 
     if (data.error) {
       messages.value.push({ role: 'error', content: '⚠️ ' + data.error, timestamp: new Date().toISOString() })
+    } else if (data.replies && data.replies.length > 0) {
+      // 多模型接力回复 — 每个模型一条气泡
+      for (const r of data.replies) {
+        messages.value.push({
+          role: 'assistant',
+          content: r.content || '(空回复)',
+          modelUsed: r.displayName || r.model,
+          sources: data.sources,
+          timestamp: new Date().toISOString()
+        })
+      }
     } else {
       messages.value.push({
         role: 'assistant', content: data.reply || '(空回复)',

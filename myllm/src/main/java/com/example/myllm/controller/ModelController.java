@@ -5,6 +5,7 @@ import com.example.myllm.service.ModelConfigService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/models")
@@ -38,8 +39,16 @@ public class ModelController {
         return "删除成功";
     }
 
-    @PutMapping("/{id}/activate")
-    public ModelConfig activateModel(@PathVariable Long id) {
-        return modelConfigService.activateModel(id);
+    /** 多选切换 — 不排他 */
+    @PutMapping("/{id}/toggle")
+    public ModelConfig toggleModel(@PathVariable Long id) {
+        return modelConfigService.toggleModel(id);
+    }
+
+    /** 批量更新排序 — 拖拽后保存 [{id:1,sortOrder:0},{id:2,sortOrder:1}] */
+    @PutMapping("/reorder")
+    public String reorder(@RequestBody List<Map<String, Object>> items) {
+        modelConfigService.reorder(items);
+        return "排序已保存";
     }
 }

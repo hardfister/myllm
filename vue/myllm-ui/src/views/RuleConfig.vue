@@ -20,10 +20,11 @@ const emit = defineEmits(['back', 'save'])
 
 // 从父组件传入的初始值填充（编辑模式有值，新建模式有默认值）
 const title = ref(props.initialData.title || '')
+const displayName = ref(props.initialData.displayName || '')
 const chosenColor = ref(props.initialData.color || '#1e3a8a')
 const showColorModal = ref(false)
-const maxTokens = ref(props.initialData.maxTokens || 4096)   // 最大输出 Token
-const prompt = ref(props.initialData.prompt || '')            // System Prompt 模板
+const maxTokens = ref(props.initialData.maxTokens || 4096)
+const prompt = ref(props.initialData.prompt || '')
 
 const openColorPicker = () => { showColorModal.value = true }
 const selectColor = (color: string) => { chosenColor.value = color; showColorModal.value = false }
@@ -31,6 +32,7 @@ const selectColor = (color: string) => { chosenColor.value = color; showColorMod
 const handleSave = () => {
   emit('save', {
     title: title.value,
+    displayName: displayName.value,
     color: chosenColor.value,
     maxTokens: maxTokens.value,
     prompt: prompt.value
@@ -49,6 +51,12 @@ const handleSave = () => {
       <div class="form-item">
         <label>配置标题：</label>
         <input type="text" v-model="title" placeholder="请输入模型设定的名称..." class="styled-input" />
+      </div>
+
+      <!-- 对话显示名（多模型对话时标注"谁在说话"） -->
+      <div class="form-item">
+        <label>对话显示名（多模型时辨识身份）：</label>
+        <input type="text" v-model="displayName" placeholder="如：翻译官、法律顾问..." class="styled-input" />
       </div>
 
       <!-- 主题色选择（前端展示用） -->

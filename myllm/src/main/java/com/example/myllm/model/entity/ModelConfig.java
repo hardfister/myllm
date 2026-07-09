@@ -35,6 +35,13 @@ public class ModelConfig {
 
     private Integer isEnabled = 1;
 
+    /** 用户给模型取的显示名，用于对话中标注"谁在说话" */
+    @Column(length = 100)
+    private String displayName;
+
+    /** 排序序号，多模型对话时按此顺序依次调用 */
+    private Integer sortOrder = 0;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
