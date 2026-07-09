@@ -1,8 +1,8 @@
 # MyLLM — 大模型对话配置管理平台
 
-> 最后更新: 2026-07-06
+> 最后更新: 2026-07-09
 
-全栈 LLM 对话应用，基于 **Spring Boot 4.1 + Vue 3 + MySQL**。支持多模型预设切换、知识库管理、记忆策略配置、JWT 用户认证、离线本地存储、智能对话、历史记录管理。
+全栈 LLM 对话应用，基于 **Spring Boot 4.1 + Vue 3 + MySQL + Chroma**。支持多模型切换、**Chroma RAG 向量检索**、知识库管理、记忆策略、JWT 认证、离线存储、智能对话、历史记录。
 
 ---
 
@@ -35,7 +35,8 @@ MyLLM 提供从模型配置到对话的完整链路：
 | **记忆策略配置** | 三种策略（滑动窗口 / 摘要压缩 / 混合）、RAG 开关、长期记忆开关 |
 | **用户认证** | JWT 登录 / 注册、BCrypt 密码加密、Spring Security 权限控制 |
 | **离线 / 本地模式** | 未登录或断网时数据存 localStorage；登录后一键导入云端；JSON 导出 / 导入备份 |
-| **智能对话** | 自动加载启用的模型/RAG/记忆配置，动态拼装 System Prompt 后调 LLM；错误分类提示 |
+| **智能对话** | 自动加载启用的模型/RAG/记忆配置，Chroma 向量检索 + Ollama embedding + LangChain4j 调 LLM |
+| **Chroma RAG** | 上传文档 → 切片 → Ollama nomic-embed-text 向量化 → Chroma 存储 → 聊天时实时语义检索 |
 | **历史记录** | 栈式排列，第一条消息触发入库；⋮ 菜单右展开 → 二次确认删除；MySQL 持久化 |
 | **主题定制** | 8 种预设色 + HEX 自定义，全局 CSS 变量实时生效 |
 | **毛玻璃 UI** | backdrop-filter 半透明玻璃态卡片 + 可折叠侧边栏 |
@@ -56,6 +57,9 @@ MyLLM 提供从模型配置到对话的完整链路：
 | LangChain4j | 0.33.0 | OpenAI ChatModel (备选) |
 | JJWT | 0.12.6 | JWT 生成与验证 |
 | MySQL Connector | - | MySQL 8.0+ 驱动 |
+| Chroma | REST v2 | 向量数据库（RAG 语义检索） |
+| Ollama | nomic-embed-text | 本地嵌入模型 (768 维向量) |
+| Jackson | - | JSON 序列化（调 REST API） |
 | Lombok | - | 样板代码简化 |
 
 ### 前端 (`vue/myllm-ui/`)
@@ -398,6 +402,33 @@ app:
 ---
 
 ## 更新日志
+
+### v0.5.0 (2026-07-09) — Chroma RAG 向量检索
+
+**后端 (2 文件重写)**:
+- `RagService.java` — 全功能 RAG 引擎，直接调 REST API:
+  - `embed(text)` → Ollama `POST /api/embeddings` → float[768]
+  - `chromaUpsert(id, vec, meta)` → Chroma `POST /collections/{name}/documents`
+  - `chromaQuery(vec, topK)` → Chroma `POST /collections/{name}/query` → Top-K 文段+相似度
+  - `searchRelevant(query, topK)` → embedding + 向量检索 → 返回最相关文段列表
+  - `ensureChromaCollection()` → 启动时自动创建 Chroma 集合
+  - `deleteRag()` → 级联清理 Chroma 向量 + 磁盘文件 + MySQL 记录
+- `ChatService.java` — 注入 `RagService`, 用实时向量检索替代静态描述注入; Chroma 不可用时自动回退到 MySQL 全文
+
+**其他**:
+- `AiConfig.java` — 重建（RAG 不依赖 Spring AI starter）
+- `application.yml` — 精简配置
+
+### v0.4.0 (2026-07-07) — 自定义知识库
+
+**后端 (2 文件重写)**:
+- `Rag.java` — 新增 `chunkSize`(默认500), `chunkOverlap`(默认50), `chunkMethod`(fixed_size/paragraph/sentence), `content`(MEDIUMTEXT)
+- `RagService.java` — 完整重写: 文件上传时实时提取文本(UTF-8/GBK), 三种切片方式, 切片结果存 content 列
+- `RagController.java` — 上传接口新增 `chunkSize` / `chunkOverlap` / `chunkMethod` 参数
+
+**前端 (2 文件)**:
+- `RagList.vue` — 上传表单含切片配置区(集合名称/切片方式/大小/重叠); "查看"按钮编辑切片参数; 卡片显示切片元信息
+- `api/index.ts` — `Rag` 接口新增 chunk 字段
 
 ### v0.3.0 (2026-07-06) — 智能对话 + 历史记录
 
