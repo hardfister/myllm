@@ -9,7 +9,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.net.ConnectException;
 import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
@@ -43,7 +42,8 @@ public class ChatService {
     private final MemoryConfigRepository memoryRepo;
     private final SessionRepository sessionRepo;
     private final MessageRepository messageRepo;
-    private final RagService ragService;  // RAG 向量检索
+    private final RagService ragService;
+    private final SessionPersistenceService persistenceService;  // 独立事务管理
 
     private final Map<String, List<Map<String, String>>> sessions = new ConcurrentHashMap<>();
 
@@ -52,13 +52,15 @@ public class ChatService {
                        MemoryConfigRepository memoryRepo,
                        SessionRepository sessionRepo,
                        MessageRepository messageRepo,
-                       RagService ragService) {
+                       RagService ragService,
+                       SessionPersistenceService persistenceService) {
         this.modelConfigRepo = modelConfigRepo;
         this.ragRepo = ragRepo;
         this.memoryRepo = memoryRepo;
         this.sessionRepo = sessionRepo;
         this.messageRepo = messageRepo;
         this.ragService = ragService;
+        this.persistenceService = persistenceService;
     }
 
     /**
@@ -195,17 +197,17 @@ public class ChatService {
         history.add(Map.of("role", "user", "content", userMessage));
         history.add(Map.of("role", "assistant", "content", aiReply != null ? aiReply : ""));
 
-        // 11. 持久化到 MySQL（以 DB 实际情况判断是否新会话，比前端标记可靠）
+        // 11. 持久化到 MySQL（独立事务 Service，确保 DB 写入）
         Rag firstRag = enabledRags.isEmpty() ? null : enabledRags.get(0);
-        Long sessionDbId = persistSessionAndMessage(
+        Long sessionDbId = persistenceService.saveSessionAndMessage(
                 sessionId, !dbSessionExists, userMessage, aiReply,
-                activeModel, activeMemory, firstRag, model);
+                activeModel, activeMemory, firstRag);
 
         // 12. 新会话：AI 自动生成标题
         if (!dbSessionExists && sessionDbId != null) {
             String aiTitle = generateSessionTitle(model, userMessage, aiReply);
             if (aiTitle != null) {
-                updateSessionTitle(sessionDbId, aiTitle);
+                persistenceService.updateTitle(sessionDbId, aiTitle);
             }
         }
 
@@ -214,7 +216,8 @@ public class ChatService {
 
     // ==================== 历史记录 API ====================
 
-    /** 获取所有会话列表 */
+    /** 获取所有会话列表 — 只读事务，避免 N+1 连接开销 */
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listSessions() {
         List<Session> all = sessionRepo.findAllByOrderByUpdatedAtDesc();
         List<Map<String, Object>> result = new ArrayList<>();
@@ -263,54 +266,7 @@ public class ChatService {
     }
 
     /**
-     * 持久化会话和消息到 MySQL
-     * - 新会话：创建 Session 记录 + 保存首条 Message
-     * - 已有会话：追加 Message + 更新 Session.updatedAt
-     * @return Session 的数据库主键 ID（新会话用于后续标题更新）
-     */
-    private Long persistSessionAndMessage(String sessionId, boolean isNew,
-                                           String userMsg, String aiReply,
-                                           ModelConfig model, MemoryConfig mem, Rag rag,
-                                           OpenAiChatModel unused) {
-        try {
-            Session session;
-            if (isNew) {
-                // 新建 Session 记录，标题先用占位符（AI 会在 chat() 返回前异步替换）
-                session = new Session();
-                session.setSessionName(sessionId);
-                session.setTitle("新对话");  // 临时占位，等 AI 生成后覆盖
-                session.setModelId(model != null ? model.getId() : null);
-                session.setMemoryId(mem != null ? mem.getId() : null);
-                session.setRagId(rag != null ? rag.getId() : null);
-                session = sessionRepo.save(session);
-            } else {
-                // 已有会话：直接更新 updatedAt（触发 @PreUpdate）
-                session = sessionRepo.findBySessionName(sessionId);
-                if (session != null) {
-                    session.setUpdatedAt(LocalDateTime.now());
-                    sessionRepo.save(session);
-                }
-            }
-
-            if (session != null) {
-                // 每次对话都实时保存一条 Message 记录
-                Message msg = new Message();
-                msg.setSessionId(session.getId());
-                msg.setUserMessage(userMsg);
-                msg.setAiResponse(aiReply);
-                msg.setTokensUsed(estimateTokens(userMsg, aiReply));
-                messageRepo.save(msg);
-                return session.getId();
-            }
-        } catch (Exception e) {
-            System.err.println("[DB] 持久化失败: " + e.getMessage());
-        }
-        return null;
-    }
-
-    /**
      * AI 自动生成会话标题（新会话首次对话后调用）
-     * 调用同一个 LLM，用极简 prompt 让模型把首轮对话总结为 ≤20 字的标题
      * @return 生成的标题，失败返回 null
      */
     private String generateSessionTitle(OpenAiChatModel model, String userMsg, String aiReply) {
@@ -332,23 +288,6 @@ public class ChatService {
             System.err.println("[标题生成] 失败: " + e.getMessage());
         }
         return null;
-    }
-
-    /** 异步更新 Session 标题（AI 生成标题后调用） */
-    private void updateSessionTitle(Long sessionDbId, String title) {
-        try {
-            sessionRepo.findById(sessionDbId).ifPresent(s -> {
-                s.setTitle(title);
-                sessionRepo.save(s);
-            });
-        } catch (Exception e) {
-            System.err.println("[标题更新] 失败: " + e.getMessage());
-        }
-    }
-
-    private int estimateTokens(String user, String ai) {
-        int total = (user != null ? user.length() : 0) + (ai != null ? ai.length() : 0);
-        return Math.max(1, total / 2);
     }
 
     private String classifyError(Exception e) {
