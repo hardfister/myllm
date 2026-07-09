@@ -539,7 +539,22 @@ npm run build         # 生产构建
 9. `curl -X GET http://localhost:8080/api/models` → 应返回 401/403
 
 ---
+# 问题及其解决方法
 
+### 对话无法存入db
+根因：myllm_db.sql 中 MySQL 列名用 SessionId、UserId 等 PascalCase。Hibernate 默认的 ImplicitNamingStrategy 会把 Java
+  的 sessionId 字段自动转成 session_id（snake_case），即使你写了 @Column(name="SessionId")，Spring Boot 的
+  SpringImplicitNamingStrategy 仍会覆盖。
+
+  结果：Hibernate 生成 INSERT INTO message (..., session_id, ...)，但 MySQL 表中的列名是 SessionId → MySQL 报 Field
+  'SessionId' doesn't have a default value → 插入失败。
+
+  修复：application.yml 加一行：
+  spring.jpa.hibernate.naming.physical-strategy:
+    org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+  StandardImpl 不做任何转换，@Column(name="SessionId") 就是 SessionId，和 MySQL 列名完全匹配。
+
+  重启后端，聊天回复正常返回，同时 Message 表正确写入。
 ## License
 
 MIT

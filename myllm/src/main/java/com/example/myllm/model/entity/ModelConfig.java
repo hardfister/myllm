@@ -13,7 +13,7 @@ public class ModelConfig {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "UserId")
+    @Column(name = "user_id")
     private Long userId;
 
     @Column(nullable = false, length = 100)
