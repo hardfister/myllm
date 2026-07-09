@@ -144,7 +144,7 @@ export interface ChatMessage {
   modelUsed?: string
   sources?: string[]
   timestamp?: string
-  sessionId:nu
+  sessionId?: string
 }
 
 export interface HistorySession {
@@ -216,10 +216,9 @@ export function toggleMemory(id: number): Promise<{ data: MemoryConfig }> {
 export function getRags(): Promise<{ data: Rag[] }> {
   return api.get('/api/rags')
 }
+/** 上传文件：不设 Content-Type，让浏览器自动加 multipart boundary */
 export function createRag(formData: FormData): Promise<{ data: Rag }> {
-  return api.post('/api/rags', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  return api.post('/api/rags', formData)
 }
 export function updateRag(id: number, data: Partial<Rag>): Promise<{ data: Rag }> {
   return api.put(`/api/rags/${id}`, data)

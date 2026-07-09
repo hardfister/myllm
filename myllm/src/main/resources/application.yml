@@ -13,6 +13,28 @@ spring:
       ddl-auto: update
     show-sql: true
 
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+
+  # Spring AI: Ollama embedding + Chroma 向量存储
+  ai:
+    ollama:
+      embedding:
+        enabled: true
+        model: nomic-embed-text
+        base-url: http://localhost:11434
+      init:
+        pull-model-strategy: never
+    vectorstore:
+      chroma:
+        initialize-schema: true
+        client:
+          host: http://127.0.0.1
+          port: 8000
+        collection-name: my_knowledge_base
+
 # JWT
 app:
   jwt:

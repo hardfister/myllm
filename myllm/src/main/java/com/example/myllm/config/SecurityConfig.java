@@ -43,10 +43,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/chat").permitAll()
                 .requestMatchers("/api/sessions/**").permitAll()
                 .requestMatchers("/api/sessions").permitAll()
-                .requestMatchers("/api/models/**").authenticated()
-                .requestMatchers("/api/rags/**").authenticated()
-                .requestMatchers("/api/memories/**").authenticated()
-                .requestMatchers("/api/sync/**").authenticated()
+                // 模型/知识库/记忆的 CRUD 公开 — 前端自行判断在线/离线模式
+                .requestMatchers("/api/models/**").permitAll()
+                .requestMatchers("/api/rags/**").permitAll()
+                .requestMatchers("/api/memories/**").permitAll()
+                .requestMatchers("/api/sync/**").permitAll()
                 .anyRequest().permitAll()
             )
             .addFilterBefore(new JwtAuthFilter(jwtUtil, userRepository),

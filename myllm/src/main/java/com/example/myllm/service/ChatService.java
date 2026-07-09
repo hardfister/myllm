@@ -43,6 +43,7 @@ public class ChatService {
     private final MemoryConfigRepository memoryRepo;
     private final SessionRepository sessionRepo;
     private final MessageRepository messageRepo;
+    private final RagService ragService;  // RAG 向量检索
 
     private final Map<String, List<Map<String, String>>> sessions = new ConcurrentHashMap<>();
 
@@ -50,12 +51,14 @@ public class ChatService {
                        RagRepository ragRepo,
                        MemoryConfigRepository memoryRepo,
                        SessionRepository sessionRepo,
-                       MessageRepository messageRepo) {
+                       MessageRepository messageRepo,
+                       RagService ragService) {
         this.modelConfigRepo = modelConfigRepo;
         this.ragRepo = ragRepo;
         this.memoryRepo = memoryRepo;
         this.sessionRepo = sessionRepo;
         this.messageRepo = messageRepo;
+        this.ragService = ragService;
     }
 
     /**
@@ -83,17 +86,47 @@ public class ChatService {
             return ChatResponse.error("没有启用的模型配置", sessionId);
         }
 
-        // 3. 加载启用的 RAG 文档，拼接为上下文
+        // 3. 加载启用的 RAG 文档列表（用于持久化关联）
         List<Rag> enabledRags = ragRepo.findAllByOrderByCreatedAtDesc().stream()
                 .filter(r -> r.getIsEnabled() != null && r.getIsEnabled() == 1)
                 .collect(Collectors.toList());
-        List<String> sources = enabledRags.stream().map(Rag::getFilename).collect(Collectors.toList());
 
+        // 4. RAG 向量检索: 用用户问题在 Chroma 中搜索最相关的文段
+        List<String> sources = new ArrayList<>();
         StringBuilder ragContext = new StringBuilder();
-        for (Rag rag : enabledRags) {
-            if (rag.getDescription() != null && !rag.getDescription().isBlank()) {
-                ragContext.append("【").append(rag.getFilename()).append("】")
-                          .append(rag.getDescription()).append("\n");
+
+        try {
+            // 调 Chroma 相似度搜索, Top-5 最相关文段
+            List<Map<String, Object>> ragResults = ragService.searchRelevant(userMessage, 5);
+            if (!ragResults.isEmpty()) {
+                // 去重来源列表
+                sources = ragResults.stream()
+                        .map(r -> (String) r.get("source"))
+                        .distinct().collect(Collectors.toList());
+
+                ragContext.append("【参考知识库内容（向量检索）】\n");
+                for (int i = 0; i < ragResults.size(); i++) {
+                    Map<String, Object> item = ragResults.get(i);
+                    ragContext.append("--- 文段 ").append(i + 1)
+                              .append(" (来源: ").append(item.get("source"))
+                              .append(", 相似度: ").append(String.format("%.2f", item.get("similarity")))
+                              .append(") ---\n")
+                              .append(item.get("content")).append("\n\n");
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[RAG] 向量检索异常，回退到描述注入: " + e.getMessage());
+            // 回退: 用已启用的 RAG 文档全文作为上下文
+            sources = enabledRags.stream().map(Rag::getFilename).collect(Collectors.toList());
+            for (Rag rag : enabledRags) {
+                if (rag.getContent() != null && !rag.getContent().isBlank()) {
+                    // 注入全文（无检索时用全文，取前 2000 字）
+                    String snippet = rag.getContent().length() > 2000
+                            ? rag.getContent().substring(0, 2000) + "..."
+                            : rag.getContent();
+                    ragContext.append("【").append(rag.getFilename()).append("】\n")
+                              .append(snippet).append("\n");
+                }
             }
         }
 

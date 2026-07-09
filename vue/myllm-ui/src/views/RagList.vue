@@ -64,23 +64,30 @@ const onDrop = (e: DragEvent) => {
   if (e.dataTransfer?.files?.[0]) selectedFile.value = e.dataTransfer.files[0]
 }
 
-// ===== 文件上传（带切片参数） =====
+// ===== 文件上传（在线优先，失败自动降级到本地） =====
 const handleUpload = async () => {
   if (!selectedFile.value) { alert('请先选择文件'); return }
   uploading.value = true
   try {
+    let success = false
     if (useServer()) {
-      // 服务器模式：FormData 包含文件 + 切片参数
-      const fd = new FormData()
-      fd.append('file', selectedFile.value)
-      fd.append('collectionName', collectionName.value)
-      fd.append('chunkSize', String(chunkSize.value))
-      fd.append('chunkOverlap', String(chunkOverlap.value))
-      fd.append('chunkMethod', chunkMethod.value)
-      await createRag(fd)
-      await loadRagsData()
-    } else {
-      // 离线模式：FileReader → base64
+      try {
+        const fd = new FormData()
+        fd.append('file', selectedFile.value)
+        fd.append('collectionName', collectionName.value)
+        fd.append('chunkSize', String(chunkSize.value))
+        fd.append('chunkOverlap', String(chunkOverlap.value))
+        fd.append('chunkMethod', chunkMethod.value)
+        await createRag(fd)
+        await loadRagsData()
+        success = true
+      } catch (e) {
+        console.warn('服务器上传失败，降级到本地存储:', e)
+        // 不弹 alert → 静默降级
+      }
+    }
+    if (!success) {
+      // 离线/降级模式：FileReader → base64 存 localStorage
       const reader = new FileReader()
       const fileData = await new Promise<string>(r => {
         reader.onload = () => r(reader.result as string)
@@ -299,7 +306,7 @@ emit('updateColor', '#0d9488')
 </template>
 
 <style scoped>
-.rag-container-glass { width: 90%; max-width: 780px; padding: 24px; border-radius: 20px; background: rgba(255,255,255,0.45); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.5); box-shadow: 0 20px 40px rgba(0,0,0,0.02); }
+.rag-container-glass { width: 90%; max-width: 780px; padding: 24px; border-radius: 20px; background: rgba(255,255,255,0.45); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.5); box-shadow: 0 20px 40px rgba(0,0,0,0.02); max-height: 80vh; overflow-y: auto; }
 .list-layout { display: flex; flex-direction: column; gap: 16px; }
 .list-header { display: flex; justify-content: space-between; align-items: center; }
 .mode-badge { font-size: 11px; color: #ea580c; background: rgba(234,88,12,0.1); padding: 4px 10px; border-radius: 10px; font-weight: bold; }
