@@ -138,6 +138,13 @@ export interface ChatResponse {
   modelUsed: string
 }
 
+/** 后端返回的每条消息记录 */
+export interface SessionMessage {
+  role: string
+  content: string
+  timestamp?: string
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'error' | 'system'
   content: string
@@ -246,6 +253,9 @@ export function clearSession(sessionId: string): Promise<{ data: string }> {
 
 export function listSessions(): Promise<{ data: HistorySession[] }> {
   return api.get('/api/sessions')
+}
+export function getSessionMessages(sessionId: string): Promise<{ data: SessionMessage[] }> {
+  return api.get(`/api/sessions/${sessionId}/messages`)
 }
 export function deleteSession(dbId: number): Promise<{ data: { message: string } }> {
   return api.delete(`/api/sessions/${dbId}`)

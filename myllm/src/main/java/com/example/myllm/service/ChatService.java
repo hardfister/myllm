@@ -70,12 +70,11 @@ public class ChatService {
      * 和 updateSessionTitle 内部自管理事务。
      */
     public ChatResponse chat(String userMessage, String sessionId) {
-        // 1. 获取或创建会话 ID — 以 DB 是否存在为准（不信任前端的 isNew 标记）
+        // 1. 获取或创建会话 ID — 以 DB 是否存在为准
         boolean dbSessionExists = false;
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = UUID.randomUUID().toString().substring(0, 8);
         } else {
-            // 检查这个 sessionId 在 DB 中是否已有 Session 记录
             dbSessionExists = (sessionRepo.findBySessionName(sessionId) != null);
         }
 
@@ -137,8 +136,21 @@ public class ChatService {
                 .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
                 .findFirst().orElse(null);
 
-        // 5. 获取内存中的历史消息并裁剪（对话记忆）
+        // 5. 如会话在 DB 中存在但内存中还没有（打开了历史会话），从 DB 加载到内存
         List<Map<String, String>> history = getOrCreateHistory(sessionId);
+        if (dbSessionExists && history.isEmpty()) {
+            Session dbSession = sessionRepo.findBySessionName(sessionId);
+            if (dbSession != null) {
+                List<Message> pastMsgs = messageRepo.findBySessionIdOrderByCreatedAt(dbSession.getId());
+                for (Message m : pastMsgs) {
+                    history.add(Map.of("role", "user", "content", m.getUserMessage()));
+                    if (m.getAiResponse() != null && !m.getAiResponse().isEmpty()) {
+                        history.add(Map.of("role", "assistant", "content", m.getAiResponse()));
+                    }
+                }
+                System.out.println("[记忆] 从 DB 加载了 " + pastMsgs.size() + " 条历史消息到内存");
+            }
+        }
         List<Map<String, String>> contextMessages = applyMemoryStrategy(history, activeMemory);
 
         // 6. 拼装对话历史文本（注入 LLM 调用实现记忆）
@@ -242,6 +254,33 @@ public class ChatService {
             item.put("messageCount", count);
             item.put("updatedAt", s.getUpdatedAt() != null ? s.getUpdatedAt().toString() : null);
             result.add(item);
+        }
+        return result;
+    }
+
+    /**
+     * 获取某会话的完整消息列表 — 用于前端点击历史会话后加载对话记录
+     */
+    public List<Map<String, Object>> getSessionMessages(String sessionId) {
+        Session s = sessionRepo.findBySessionName(sessionId);
+        if (s == null) return List.of();
+
+        List<Message> msgs = messageRepo.findBySessionIdOrderByCreatedAt(s.getId());
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Message m : msgs) {
+            Map<String, Object> user = new LinkedHashMap<>();
+            user.put("role", "user");
+            user.put("content", m.getUserMessage());
+            user.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
+            result.add(user);
+
+            if (m.getAiResponse() != null && !m.getAiResponse().isEmpty()) {
+                Map<String, Object> ai = new LinkedHashMap<>();
+                ai.put("role", "assistant");
+                ai.put("content", m.getAiResponse());
+                ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
+                result.add(ai);
+            }
         }
         return result;
     }

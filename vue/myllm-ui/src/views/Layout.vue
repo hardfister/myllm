@@ -16,8 +16,8 @@ import RagList from './RagList.vue'
 import ModelList from './ModelList.vue'
 import MemList from './MemList.vue'
 import LoginModal from './LoginModal.vue'
-import { sendChatMessage, newSession, clearSession, listSessions, deleteSession } from '../api'
-import type { ChatResponse, ChatMessage, HistorySession } from '../api'
+import { sendChatMessage, newSession, clearSession, listSessions, deleteSession, getSessionMessages } from '../api'
+import type { ChatResponse, ChatMessage, HistorySession, SessionMessage } from '../api'
 import { useAuth, checkAuth, logout } from '../services/auth'
 import {
   clearAll, exportToJson, importFromJson,
@@ -87,13 +87,27 @@ const startNewChat = () => {
   if (isLoggedIn.value) loadHistorySessions()
 }
 
-// ===== 点击历史会话 → 切换到该会话 =====
-const openHistorySession = (item: HistorySession) => {
+// ===== 点击历史会话 → 加载历史消息并切换到该会话 =====
+const openHistorySession = async (item: HistorySession) => {
   currentView.value = 'chat'
   sessionId.value = item.sessionId
-  // 清空当前消息 — 开始在该会话下对话
-  messages.value = []
   isStreaming.value = false
+  messages.value = []
+
+  // 从后端加载该会话的完整消息记录
+  if (isLoggedIn.value) {
+    try {
+      const res = await getSessionMessages(item.sessionId)
+      const historyMsgs = res.data as SessionMessage[]
+      messages.value = historyMsgs.map(m => ({
+        role: m.role as ChatMessage['role'],
+        content: m.content,
+        timestamp: m.timestamp
+      }))
+    } catch (e) {
+      console.error('加载历史消息失败:', e)
+    }
+  }
 }
 
 // ===== 发送消息 =====

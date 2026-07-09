@@ -63,6 +63,12 @@ public class ChatController {
         return chatService.listSessions();
     }
 
+    /** 获取指定会话的全部消息（用于点击历史会话后加载对话记录） */
+    @GetMapping("/api/sessions/{sessionId}/messages")
+    public List<Map<String, Object>> getSessionMessages(@PathVariable String sessionId) {
+        return chatService.getSessionMessages(sessionId);
+    }
+
     /** 删除指定会话（含其下的全部消息），id 为 Session 表的自增主键 */
     @DeleteMapping("/api/sessions/{dbSessionId}")
     public Map<String, String> deleteSession(@PathVariable Long dbSessionId) {
