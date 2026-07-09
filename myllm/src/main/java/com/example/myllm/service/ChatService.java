@@ -197,17 +197,27 @@ public class ChatService {
         history.add(Map.of("role", "user", "content", userMessage));
         history.add(Map.of("role", "assistant", "content", aiReply != null ? aiReply : ""));
 
-        // 11. 持久化到 MySQL（独立事务 Service，确保 DB 写入）
+        // 11. 持久化到 MySQL — 异常不阻断聊天回复
         Rag firstRag = enabledRags.isEmpty() ? null : enabledRags.get(0);
-        Long sessionDbId = persistenceService.saveSessionAndMessage(
-                sessionId, !dbSessionExists, userMessage, aiReply,
-                activeModel, activeMemory, firstRag);
+        Long sessionDbId = null;
+        try {
+            sessionDbId = persistenceService.saveSessionAndMessage(
+                    sessionId, !dbSessionExists, userMessage, aiReply,
+                    activeModel, activeMemory, firstRag);
+        } catch (Exception e) {
+            System.err.println("[DB] 持久化异常: " + e.getMessage());
+            e.printStackTrace();
+        }
 
         // 12. 新会话：AI 自动生成标题
         if (!dbSessionExists && sessionDbId != null) {
-            String aiTitle = generateSessionTitle(model, userMessage, aiReply);
-            if (aiTitle != null) {
-                persistenceService.updateTitle(sessionDbId, aiTitle);
+            try {
+                String aiTitle = generateSessionTitle(model, userMessage, aiReply);
+                if (aiTitle != null) {
+                    persistenceService.updateTitle(sessionDbId, aiTitle);
+                }
+            } catch (Exception e) {
+                System.err.println("[标题] 生成/更新异常: " + e.getMessage());
             }
         }
 
@@ -216,8 +226,7 @@ public class ChatService {
 
     // ==================== 历史记录 API ====================
 
-    /** 获取所有会话列表 — 只读事务，避免 N+1 连接开销 */
-    @Transactional(readOnly = true)
+    /** 获取所有会话列表 */
     public List<Map<String, Object>> listSessions() {
         List<Session> all = sessionRepo.findAllByOrderByUpdatedAtDesc();
         List<Map<String, Object>> result = new ArrayList<>();
