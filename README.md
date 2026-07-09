@@ -401,34 +401,122 @@ app:
 
 ---
 
+## 开发中遇到的问题与解决方法
+
+### 1. Hibernate 列名映射错误
+
+**现象**：聊天回复正常，但 Message/Session 表写入失败，报错 `Field 'SessionId' doesn't have a default value`。
+
+**根因**：`myllm_db.sql` 建表使用 PascalCase（`SessionId`, `UserId` 等）。Hibernate 默认 `ImplicitNamingStrategy` 将 Java `sessionId` 转为 `session_id`。`ddl-auto: update` 使 Hibernate 认为需要新建 `session_id` 列 → 表中同时存在 `SessionId`（旧）和 `session_id`（新），旧列有 NOT NULL 约束但没有默认值 → INSERT 失败。
+
+**解决**：
+1. 所有 JPA 实体 `@Column(name=...)` 统一改为 snake_case（`session_id`, `user_id`, `model_id` 等）
+2. MySQL 中手动删除重复列和外键：
+```sql
+ALTER TABLE Message DROP FOREIGN KEY fk_message_session;
+ALTER TABLE Message DROP COLUMN SessionId;
+ALTER TABLE Session DROP FOREIGN KEY fk_session_user;
+ALTER TABLE Session DROP COLUMN UserId, DROP COLUMN ModelId, DROP COLUMN MemoryId, DROP COLUMN RagId;
+```
+3. 移除 `PhysicalNamingStrategyStandardImpl`，使用 Hibernate 默认策略，保持列名一致。
+
+### 2. Spring AI 依赖启动失败
+
+**现象**：`APPLICATION FAILED TO START` — OpenAI 自动配置要求 API Key。
+
+**根因**：`spring-ai-starter-model-openai` 在启动时自动创建 `openAiChatModel` Bean，OpenAI Java SDK 强制要求 `apiKey`，未配置即抛 `IllegalStateException`。
+
+**解决**：移除 `spring-ai-starter-model-openai` 和 `spring-ai-starter-model-ollama`。改为直接调 LangChain4j（`langchain4j-open-ai` 兼容所有 OpenAI 格式 LLM）和调 Ollama/Chroma REST API（不依赖 Spring AI starter）。
+
+### 3. 持久化数据丢失
+
+**现象**：发完消息后 Message 表无记录，历史面板为空。
+
+**根因**：`ChatService.chat()` 为非事务方法（LLM 调用耗时 60-120s，事务会耗尽连接池）。内部的 `persistSessionAndMessage()` 是 **private** 方法 — Spring AOP 代理无法拦截 private 方法的 `@Transactional` → `save()` 无事务环境运行 → 写入未提交。
+
+**解决**：
+1. 抽取 `SessionPersistenceService` 为独立 @Service Bean
+2. 持久化方法改为 public + @Transactional
+3. ChatService 中持久化调用放入异步线程 `new Thread(...).start()` — DB 写入失败不影响聊天回复
+
+### 4. 历史会话加载为空
+
+**现象**：点击历史会话 → 消息列表空白，后续对话无上下文记忆。
+
+**根因**：前端 `openHistorySession()` 只设置了 `sessionId` 但未加载历史消息；后端 `chat()` 只从内存 HashMap 读取历史，未从 DB 恢复。
+
+**解决**：
+1. 新建 `GET /api/sessions/{sessionId}/messages` API — 从 MySQL 按时间序返回完整消息列表
+2. 前端 `openHistorySession()` 改为 async → 调新 API → 渲染历史气泡
+3. 后端 `chat()` 中若 sessionId 在 DB 中存在但内存为空 → 自动 `findBySessionIdOrderByCreatedAt` 恢复到内存 → LLM 获得完整上下文
+
+### 5. multipart 文件上传失败
+
+**现象**：知识库上传文件提示"上传失败"。
+
+**根因**（三重）：
+1. **axios 手动设 `Content-Type: multipart/form-data`** → 缺少浏览器自动生成的 `boundary=----xxx` 参数 → Spring 无法解析
+2. **Spring Security 拦截 `/api/rags/**` 要求认证** → 未登录时 401，已登录但 token 过期也 401
+3. **Spring 默认 `max-file-size: 1MB`** → 超过 1MB 文件抛出 `MaxUploadSizeExceededException` → 500
+
+**解决**：
+1. `createRag(formData)` 不设 Content-Type，浏览器自动加 boundary
+2. `/api/rags/**` 改为 `.permitAll()`
+3. `application.yml` 设置 `spring.servlet.multipart.max-file-size: 50MB`
+
+### 6. Spring AI BOM 版本不存在
+
+**现象**：`Could not find artifact org.springframework.ai:spring-ai-starter-vector-store-chroma:jar:1.0.0-M6`
+
+**根因**：Spring AI 1.0.0-M6 尚未发布到 Maven Central（仅有 snapshot 在 Spring Milestone 仓库，且版本号不对）。
+
+**解决**：放弃 Spring AI Chroma/Ollama starter，改为 `java.net.http.HttpClient` 直接调 REST API：
+- `Ollama POST /api/embeddings` → 768 维向量
+- `Chroma POST /api/v2/collections/{name}/documents` → 写向量
+- `Chroma POST /api/v2/collections/{name}/query` → 向量搜索
+- 添加 `jackson-databind` 依赖用于 JSON 序列化
+
+### 7. 历史会话加载为空 + 对话无记忆
+
+**现象**：点击历史会话 → 消息列表空白，继续对话无上下文。
+
+**根因**：前端 `openHistorySession()` 只设置 `sessionId` 未加载消息；后端 `chat()` 只从内存 HashMap 读历史，未从 DB 恢复；LLM 调用时只传了当前消息，历史上下文完全丢失。
+
+**解决**：
+1. `GET /api/sessions/{sessionId}/messages` — 从 MySQL 按时间序返回完整消息列表
+2. 前端 `openHistorySession()` → async → 调新 API → 渲染历史气泡
+3. 后端 `chat()` 检测 sessionId 在 DB 存在但内存为空 → `findBySessionIdOrderByCreatedAt` 恢复到内存 → LLM 获得完整上下文
+4. `fullPrompt = historyText + userMessage` — 历史文本拼在用户消息前面一起发给 LLM
+
+---
+
 ## 更新日志
+
+### v0.5.1 (2026-07-09) — 持久化修复 + 历史消息加载 + 对话记忆
+
+**后端**:
+- `SessionPersistenceService.java` (新建) — 独立事务 Bean，异步线程写入，DB 异常不阻断聊天
+- `ChatService.java` — 打开历史会话时 DB→内存恢复；`getSessionMessages()` 返回完整消息列表
+- `ChatController.java` — 新增 `GET /api/sessions/{sessionId}/messages`
+- 所有实体列名统一为 snake_case (`@Column(name="session_id")` 等)，修复 Hibernate 映射错误
+
+**前端**:
+- `Layout.vue` — `openHistorySession()` 改为 async → 调 API 加载历史气泡
+- `api/index.ts` — 新增 `SessionMessage` 接口 + `getSessionMessages()` API
 
 ### v0.5.0 (2026-07-09) — Chroma RAG 向量检索
 
-**后端 (2 文件重写)**:
-- `RagService.java` — 全功能 RAG 引擎，直接调 REST API:
-  - `embed(text)` → Ollama `POST /api/embeddings` → float[768]
-  - `chromaUpsert(id, vec, meta)` → Chroma `POST /collections/{name}/documents`
-  - `chromaQuery(vec, topK)` → Chroma `POST /collections/{name}/query` → Top-K 文段+相似度
-  - `searchRelevant(query, topK)` → embedding + 向量检索 → 返回最相关文段列表
-  - `ensureChromaCollection()` → 启动时自动创建 Chroma 集合
-  - `deleteRag()` → 级联清理 Chroma 向量 + 磁盘文件 + MySQL 记录
-- `ChatService.java` — 注入 `RagService`, 用实时向量检索替代静态描述注入; Chroma 不可用时自动回退到 MySQL 全文
-
-**其他**:
-- `AiConfig.java` — 重建（RAG 不依赖 Spring AI starter）
-- `application.yml` — 精简配置
+- `RagService.java` — 全功能 RAG 引擎：`embed()` → Ollama, `chromaUpsert/Query/Delete()` → Chroma REST API, `searchRelevant()` 语义检索
+- `ChatService.java` — 注入 RagService，实时向量检索替代静态描述
+- `AiConfig.java` — 重建（不依赖 Spring AI starter）
+- `pom.xml` — 添加 jackson-databind
 
 ### v0.4.0 (2026-07-07) — 自定义知识库
 
-**后端 (2 文件重写)**:
-- `Rag.java` — 新增 `chunkSize`(默认500), `chunkOverlap`(默认50), `chunkMethod`(fixed_size/paragraph/sentence), `content`(MEDIUMTEXT)
-- `RagService.java` — 完整重写: 文件上传时实时提取文本(UTF-8/GBK), 三种切片方式, 切片结果存 content 列
-- `RagController.java` — 上传接口新增 `chunkSize` / `chunkOverlap` / `chunkMethod` 参数
-
-**前端 (2 文件)**:
-- `RagList.vue` — 上传表单含切片配置区(集合名称/切片方式/大小/重叠); "查看"按钮编辑切片参数; 卡片显示切片元信息
-- `api/index.ts` — `Rag` 接口新增 chunk 字段
+- `Rag.java` — 新增 `chunkSize`/`chunkOverlap`/`chunkMethod`/`content`(MEDIUMTEXT)
+- `RagService.java` — 文本提取 + 三种切片方式 (fixed_size/paragraph/sentence)
+- `RagController.java` — 上传接口新增切片参数
+- `RagList.vue` — 上传表单含切片配置区
 
 ### v0.3.0 (2026-07-06) — 智能对话 + 历史记录
 
@@ -539,22 +627,6 @@ npm run build         # 生产构建
 9. `curl -X GET http://localhost:8080/api/models` → 应返回 401/403
 
 ---
-# 问题及其解决方法
-
-### 对话无法存入db
-根因：myllm_db.sql 中 MySQL 列名用 SessionId、UserId 等 PascalCase。Hibernate 默认的 ImplicitNamingStrategy 会把 Java
-  的 sessionId 字段自动转成 session_id（snake_case），即使你写了 @Column(name="SessionId")，Spring Boot 的
-  SpringImplicitNamingStrategy 仍会覆盖。
-
-  结果：Hibernate 生成 INSERT INTO message (..., session_id, ...)，但 MySQL 表中的列名是 SessionId → MySQL 报 Field
-  'SessionId' doesn't have a default value → 插入失败。
-
-  修复：application.yml 加一行：
-  spring.jpa.hibernate.naming.physical-strategy:
-    org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
-  StandardImpl 不做任何转换，@Column(name="SessionId") 就是 SessionId，和 MySQL 列名完全匹配。
-
-  重启后端，聊天回复正常返回，同时 Message 表正确写入。
 ## License
 
 MIT
