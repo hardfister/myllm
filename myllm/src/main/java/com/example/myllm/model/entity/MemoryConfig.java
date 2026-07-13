@@ -13,7 +13,7 @@ public class MemoryConfig {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "user_id")
+    @Column(name = "UserId")
     private Long userId;
 
     @Column(length = 20)

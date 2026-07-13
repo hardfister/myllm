@@ -13,7 +13,7 @@ public class Rag {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "user_id")
+    @Column(name = "UserId")
     private Long userId;
 
     @Column(nullable = false, length = 500)
