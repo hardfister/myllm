@@ -47,13 +47,10 @@ let localIdCounter = Date.now()
 
 // ===== 数据加载 =====
 const loadRagsData = async () => {
-  const localData = loadRags()
   if (useServer()) {
-    try { const res = await getRags(); rags.value = res.data
-      const serverIds = new Set(res.data.map((r: Rag) => r.id))
-      for (const r of localData) { if (r.id != null && !serverIds.has(r.id) && !rags.value.some((s: any) => s.id === r.id)) rags.value.push(r) }
-    } catch { rags.value = localData }
-  } else { rags.value = localData }
+    try { const res = await getRags(); rags.value = res.data }
+    catch { rags.value = loadRags() }
+  } else { rags.value = loadRags() }
 }
 const loadEmbeddingModels = async () => {
   if (useServer()) {

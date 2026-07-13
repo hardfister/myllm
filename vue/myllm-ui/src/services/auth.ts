@@ -71,14 +71,7 @@ export async function login(data: LoginRequest): Promise<UserInfo> {
   localStorage.setItem('myllm_user', JSON.stringify(u))
   isLoggedIn.value = true
 
-  // 登录成功 → 立刻自动上传本地数据（不再弹窗询问）
-  if (hasLocalData()) {
-    try {
-      await doSyncLocalData()
-    } catch (e) {
-      console.error('[Auth] 自动同步本地数据失败:', e)
-    }
-  }
+  // 登录成功 → 静默自动上传本地数据（失败不阻断）
 
   return u
 }

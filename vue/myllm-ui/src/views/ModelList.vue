@@ -45,18 +45,14 @@ const currentConfig = ref({
 let localIdCounter = Date.now()
 const dragIndex = ref<number | null>(null)  // 当前拖拽的项在数组中的索引
 
-// ===== 数据加载：localStorage 底 + 服务器覆盖 =====
+// ===== 数据加载 — 已登录直接用服务器数据，未登录用本地 =====
 const loadModelsData = async () => {
-  const localData = loadModels()
   if (useServer()) {
-    try {
-      const r = await getModels(); models.value = r.data
-      // 合并仅存于本地的数据（未同步的）
-      const serverIds = new Set(r.data.map((m: any) => m.id))
-      const localOnly = localData.filter((m: any) => m.id != null && !serverIds.has(m.id))
-      for (const m of localOnly) { if (!models.value.some((s: any) => s.id === m.id)) models.value.push(m) }
-    } catch { models.value = localData }
-  } else { models.value = localData }
+    try { const r = await getModels(); models.value = r.data }
+    catch { models.value = loadModels() }   // 服务器挂了才降级到本地
+  } else {
+    models.value = loadModels()
+  }
   // 按 sortOrder 排序
   models.value.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
   // 初始化 meta

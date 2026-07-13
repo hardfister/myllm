@@ -41,17 +41,14 @@ const defaultConfig = (): MemoryConfig => ({
 })
 const form = ref<MemoryConfig & { id?: number }>(defaultConfig())
 
-// ===== 数据加载：localStorage 底 + 服务器覆盖 =====
+// ===== 数据加载 — 已登录直接用服务器数据 =====
 const loadMemoriesData = async () => {
-  const localData = loadMemories()
   if (useServer()) {
-    try {
-      const res = await getMemories(); memories.value = res.data
-      const serverIds = new Set(res.data.map((m: any) => m.id))
-      const localOnly = localData.filter((m: any) => m.id != null && !serverIds.has(m.id))
-      for (const m of localOnly) { if (!memories.value.some((s: any) => s.id === m.id)) memories.value.push(m) }
-    } catch { memories.value = localData }
-  } else { memories.value = localData }
+    try { const res = await getMemories(); memories.value = res.data }
+    catch { memories.value = loadMemories() }
+  } else {
+    memories.value = loadMemories()
+  }
 }
 onMounted(loadMemoriesData)
 const persistMemories = () => { saveMemories(memories.value) }
