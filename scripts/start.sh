@@ -1,12 +1,11 @@
 #!/bin/bash
 set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "============================================"
 echo "  MyLLM 一键启动 (Linux/Mac)"
 echo "  Spring Boot + Vue 3 + Chroma + Redis"
 echo "============================================"
-
-PROJ="$(dirname "$0")"
 
 # ---- 1. Redis ----
 echo "[1/5] 检查 Redis..."
@@ -40,17 +39,17 @@ fi
 
 # ---- 4. Spring Boot ----
 echo "[4/5] 启动后端 Spring Boot..."
-cd "$PROJ/myllm"
+cd "$ROOT/myllm"
 ./mvnw spring-boot:run &
 BACKEND_PID=$!
 
 # ---- 5. Vue 3 ----
 echo "[5/5] 启动前端 Vue 3..."
-cd "$PROJ/vue/myllm-ui"
+cd "$ROOT/vue/myllm-ui"
 npm run dev &
 FRONTEND_PID=$!
 
-cd "$PROJ"
+cd "$ROOT"
 
 echo ""
 echo "============================================"

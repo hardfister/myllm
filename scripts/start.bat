@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 title MyLLM — 一键启动
+set "ROOT=%~dp0.."
 
 echo ============================================
 echo   MyLLM 全栈启动脚本
@@ -61,11 +62,11 @@ if %errorlevel% equ 0 (
 
 :: ========== 4. 启动后端 Spring Boot ==========
 echo [4/5] 启动后端 Spring Boot...
-start "MyLLM-Backend" cmd /k "cd /d E:\document\1myweb\myllm && mvnw spring-boot:run"
+start "MyLLM-Backend" cmd /k "cd /d "%ROOT%\myllm" && mvnw spring-boot:run"
 
 :: ========== 5. 启动前端 Vue 3 ==========
 echo [5/5] 启动前端 Vue 3...
-start "MyLLM-Frontend" cmd /k "cd /d E:\document\1myweb\vue\myllm-ui && npm run dev"
+start "MyLLM-Frontend" cmd /k "cd /d "%ROOT%\vue\myllm-ui" && npm run dev"
 
 :: ========== 等待启动完成 ==========
 echo.

@@ -1,0 +1,21 @@
+# IDE
+.vscode/
+
+# Chroma 向量数据（持久化在 Docker volume）
+chroma/
+
+# 上传文件目录
+myllm/uploads/
+
+# Java
+myllm/target/
+*.class
+*.jar
+
+# Node
+vue/myllm-ui/node_modules/
+vue/myllm-ui/dist/
+
+# Environment
+.env
+.env.local
