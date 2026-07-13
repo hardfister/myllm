@@ -143,6 +143,7 @@ const saveEdit = async () => {
         chunkMethod: editingRag.value.chunkMethod
       })
       await loadRagsData()
+      saveRags(rags.value)
     } else {
       const idx = rags.value.findIndex(r => r.id === editingRag.value!.id)
       if (idx !== -1) rags.value[idx] = { ...editingRag.value! }
@@ -157,7 +158,7 @@ const handleToggle = async (record: Rag, event: Event) => {
   event.stopPropagation()
   if (record.id == null) return
   if (useServer()) {
-    try { await toggleRag(record.id); await loadRagsData() }
+    try { await toggleRag(record.id); await loadRagsData(); saveRags(rags.value) }
     catch (e) { console.error('切换失败:', e) }
   } else {
     const t = rags.value.find(r => r.id === record.id)
@@ -170,7 +171,7 @@ const handleDelete = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除此文档？将同时删除磁盘文件和全部切片数据。')) return
   try {
-    if (useServer()) { await deleteRag(id); await loadRagsData() }
+    if (useServer()) { await deleteRag(id); await loadRagsData(); saveRags(rags.value) }
     else { rags.value = rags.value.filter(r => r.id !== id); persistRags() }
   } catch (e) { console.error('删除失败:', e) }
 }
