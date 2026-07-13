@@ -49,7 +49,7 @@ let localIdCounter = Date.now()
 const loadRagsData = async () => {
   if (useServer()) {
     try { const res = await getRags(); rags.value = res.data }
-    catch { rags.value = loadRags() }
+    catch { rags.value = [] }
   } else { rags.value = loadRags() }
 }
 const loadEmbeddingModels = async () => {
@@ -83,7 +83,6 @@ const handleUpload = async () => {
         fd.append('chunkMethod', chunkMethod.value)
         await createRag(fd)
         await loadRagsData()
-        saveRags(rags.value)
         success = true
       } catch (e) {
         console.warn('服务器上传失败，降级到本地存储:', e)
@@ -112,7 +111,6 @@ const handleEmbed = async (item: Rag) => {
   try {
     await embedRag(item.id, selectedEmbeddingModelId.value)
     await loadRagsData()
-    saveRags(rags.value)
   } catch (e) { console.error('向量化失败:', e); alert('向量化失败，请确认嵌入模型已配置 API Key') }
   finally { delete embeddingInProgress.value[item.id] }
 }
@@ -122,7 +120,7 @@ const openEditModal = (item: Rag, event: Event) => { event.stopPropagation(); ed
 const saveEdit = async () => {
   if (!editingRag.value?.id) return
   try {
-    if (useServer()) { await updateRag(editingRag.value.id, editingRag.value); await loadRagsData(); saveRags(rags.value) }
+    if (useServer()) { await updateRag(editingRag.value.id, editingRag.value); await loadRagsData() }
     else { const idx = rags.value.findIndex(r => r.id === editingRag.value!.id); if (idx !== -1) rags.value[idx] = { ...editingRag.value! }; persistRags() }
     showEditModal.value = false
   } catch (e) { console.error('保存失败:', e); alert('保存失败') }
@@ -132,7 +130,7 @@ const saveEdit = async () => {
 const handleToggle = async (record: Rag, event: Event) => {
   event.stopPropagation()
   if (record.id == null) return
-  if (useServer()) { try { await toggleRag(record.id); await loadRagsData(); saveRags(rags.value) } catch (e) { console.error(e) } }
+  if (useServer()) { try { await toggleRag(record.id); await loadRagsData() } catch (e) { console.error(e) } }
   else { const t = rags.value.find(r => r.id === record.id); if (t) { t.isEnabled = t.isEnabled === 1 ? 0 : 1; persistRags() } }
 }
 
@@ -140,7 +138,7 @@ const handleToggle = async (record: Rag, event: Event) => {
 const handleDelete = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除此文档？')) return
-  try { if (useServer()) { await deleteRag(id); await loadRagsData(); saveRags(rags.value) } else { rags.value = rags.value.filter(r => r.id !== id); persistRags() } }
+  try { if (useServer()) { await deleteRag(id); await loadRagsData() } else { rags.value = rags.value.filter(r => r.id !== id); persistRags() } }
   catch (e) { console.error('删除失败:', e) }
 }
 
