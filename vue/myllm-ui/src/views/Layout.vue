@@ -151,10 +151,12 @@ const sendMessage = () => {
     (_displayName: string) => {
       // 气泡已完整
     },
-    // onDone: 拿到 sessionId + 刷新历史
+    // onDone: 拿到 sessionId + 刷新侧栏历史列表
     (newSessionId: string) => {
       if (newSessionId && !sessionId.value) sessionId.value = newSessionId
       isStreaming.value = false
+      // 去除空的 AI 气泡（模型调用失败 etc）
+      messages.value = messages.value.filter(m => m.role !== 'assistant' || m.content.trim() !== '')
       if (isLoggedIn.value) loadHistorySessions()
       streamingAbort.value = null
     },

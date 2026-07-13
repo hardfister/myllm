@@ -671,8 +671,11 @@ public class ChatService {
             sb.append("你就是「").append(displayName).append("」，只代表你自己一个人。\n");
             sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话。\n");
             sb.append("仅允许：以").append(displayName).append("的角度回复你自己的观点。\n");
-            sb.append("请先阅读全部对话记录（包括其他模型已说的话），然后给出独立判断回复。\n");
-            sb.append("重要：只回应当前用户的问题，不要复述、总结或逐条回应之前对话记录中的旧内容。");
+            sb.append("⚠️ 回答规则（极其重要！违反将导致对话混乱）：\n");
+            sb.append("1. 只回应用户的【当前问题】，不要回应或复述对话框中之前的任何内容。\n");
+            sb.append("2. 不要在回复中包含任何之前的对话文本、不要总结历史、不要逐条回复旧消息。\n");
+            sb.append("3. 把你之前的所有回复都只当作参考背景，不要引用、不要翻旧账。\n");
+            sb.append("4. 输出应当像一个自然的单人回复，而非群聊记录。");
         }
 
         return sb.toString();
