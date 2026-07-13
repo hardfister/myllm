@@ -88,7 +88,7 @@ const getColor = (m: ModelConfig) => frontendMeta.value[m.id!]?.color || '#1e3a8
       </div>
     </div>
     <RuleConfig v-if="step === 'rule'" :initialData="currentConfig" @back="step = 'list'" @save="saveFinalConfig" />
-    <ModelModal v-if="showModelModal" :defaultModel="currentConfig.modelName" :defaultProvider="currentConfig.provider" :defaultBaseUrl="currentConfig.baseUrl" @close="showModelModal = false" @submit="confirmModel" />
+    <ModelModal v-if="showModelModal" :defaultModel="currentConfig.modelName" :defaultProvider="currentConfig.provider" :defaultBaseUrl="currentConfig.baseUrl" :defaultApiKey="currentConfig.apiKeyEncrypted" @close="showModelModal = false" @submit="confirmModel" />
   </div>
 </template>
 

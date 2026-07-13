@@ -180,7 +180,7 @@ public class RagService {
         return ragRepository.save(ex);
     }
 
-    @CacheEvict(value = "rag_list", allEntries = true)
+    @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public Rag toggleRag(Long id) {
         Rag t = ragRepository.findById(id).orElseThrow(() -> new RuntimeException("不存在: " + id));
@@ -188,6 +188,7 @@ public class RagService {
         return ragRepository.save(t);
     }
 
+    @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public void deleteRag(Long id) {
         Rag rag = ragRepository.findById(id).orElseThrow(() -> new RuntimeException("不存在: " + id));
@@ -209,6 +210,10 @@ public class RagService {
      * 中第一个可用的来生成向量。
      */
     public List<Map<String, Object>> searchRelevant(String query, int topK) {
+        return searchRelevant(query, topK, Set.of());
+    }
+
+    public List<Map<String, Object>> searchRelevant(String query, int topK, Set<Long> allowedRagIds) {
         if (query == null || query.isBlank()) return List.of();
         try {
             // 找任意一个已向量化的文档，用它的 embedding model
@@ -220,7 +225,10 @@ public class RagService {
             float[] queryVec = embedWithModel(query, embModel);
             if (queryVec == null) return List.of();
             return chromaQuery(queryVec, topK).stream()
-                    .filter(r -> r.get("content") != null).collect(Collectors.toList());
+                    .filter(r -> r.get("content") != null)
+                    .filter(r -> allowedRagIds == null || allowedRagIds.isEmpty()
+                            || (r.get("ragId") instanceof Long ragId && allowedRagIds.contains(ragId)))
+                    .collect(Collectors.toList());
         } catch (Exception e) {
             System.err.println("[RAG] 检索失败: " + e.getMessage());
             return List.of();
@@ -358,8 +366,11 @@ public class RagService {
                         item.put("content", arr.get(i).asText());
                         double dist = (dists != null && dists.get(0).size() > i) ? dists.get(0).get(i).asDouble() : 0;
                         item.put("similarity", Math.max(0, 1.0 - dist / 2.0));
-                        if (metas != null && metas.get(0).size() > i)
-                            item.put("source", metas.get(0).get(i).get("source").asText());
+                        if (metas != null && metas.get(0).size() > i) {
+                            JsonNode meta = metas.get(0).get(i);
+                            if (meta.has("source")) item.put("source", meta.get("source").asText());
+                            if (meta.has("rag_id")) item.put("ragId", meta.get("rag_id").asLong());
+                        }
                         results.add(item);
                     }
                 }
@@ -395,7 +406,8 @@ public class RagService {
     }
     private static List<String> chunkByFixedSize(String text, int size, int overlap) {
         List<String> c = new ArrayList<>(); int s = 0;
-        while (s < text.length()) { c.add(text.substring(s, Math.min(s + size, text.length()))); s += (size - overlap); if (s >= text.length()) break; }
+        int step = Math.max(1, size - Math.max(0, Math.min(overlap, size - 1)));
+        while (s < text.length()) { c.add(text.substring(s, Math.min(s + size, text.length()))); s += step; if (s >= text.length()) break; }
         return c;
     }
     private static List<String> chunkByParagraph(String text, int size) {

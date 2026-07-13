@@ -20,12 +20,12 @@
  */
 import { ref } from 'vue'
 
-const props = defineProps<{ defaultModel: string; defaultProvider?: string; defaultBaseUrl?: string }>()
+const props = defineProps<{ defaultModel: string; defaultProvider?: string; defaultBaseUrl?: string; defaultApiKey?: string }>()
 const emit = defineEmits(['close', 'submit'])
 
 // 当前选中的模型信息
 const selectedModel = ref<string>(props.defaultModel)
-const apiKey = ref<string>('')
+const apiKey = ref<string>(props.defaultApiKey || '')
 const provider = ref<string>(props.defaultProvider || 'DeepSeek')
 const baseUrl = ref<string>(props.defaultBaseUrl || 'https://api.deepseek.com')
 

@@ -5,6 +5,7 @@ import com.example.myllm.repository.MessageRepository;
 import com.example.myllm.repository.SessionRepository;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
@@ -25,6 +26,7 @@ public class SessionPersistenceService {
      * 任何异常都内部捕获，永不向外抛。
      */
     @CacheEvict(value = {"history_sessions", "session_msgs"}, allEntries = true)
+    @Transactional
     public Long saveSessionAndMessage(String sessionId, boolean isNew,
                                        String userMsg, String aiReply,
                                        ModelConfig model, MemoryConfig mem, Rag rag) {
@@ -67,6 +69,7 @@ public class SessionPersistenceService {
     }
 
     @CacheEvict(value = "session_msgs", allEntries = true)
+    @Transactional
     public void updateTitle(Long sessionDbId, String title) {
         try {
             sessionRepo.findById(sessionDbId).ifPresent(s -> {

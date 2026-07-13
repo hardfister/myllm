@@ -155,6 +155,10 @@ public class ChatService {
             }
         }
 
+        if (replies.isEmpty()) {
+            return ChatResponse.error("启用的模型均未返回结果，请检查 API Key、Base URL 和模型名称配置", sessionId);
+        }
+
         // 8. 异步持久化
         final String finalSessionId = sessionId;
         final boolean finalIsNew = !dbSessionExists;
@@ -294,8 +298,15 @@ public class ChatService {
     /** 构建 RAG 上下文 */
     private StringBuilder buildRagContext(String query, List<Rag> enabledRags, List<String> sources) {
         StringBuilder ragContext = new StringBuilder();
+        if (enabledRags == null || enabledRags.isEmpty()) {
+            return ragContext;
+        }
         try {
-            List<Map<String, Object>> ragResults = ragService.searchRelevant(query, 5);
+            Set<Long> enabledRagIds = enabledRags.stream()
+                    .map(Rag::getId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            List<Map<String, Object>> ragResults = ragService.searchRelevant(query, 5, enabledRagIds);
             if (!ragResults.isEmpty()) {
                 sources.addAll(ragResults.stream()
                         .map(r -> (String) r.get("source")).distinct().collect(Collectors.toList()));

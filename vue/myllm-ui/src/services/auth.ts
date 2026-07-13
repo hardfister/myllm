@@ -72,6 +72,11 @@ export async function login(data: LoginRequest): Promise<UserInfo> {
   isLoggedIn.value = true
 
   // 登录成功 → 静默自动上传本地数据（失败不阻断）
+  try {
+    await syncLocalData()
+  } catch (e) {
+    console.warn('[Auth] 本地数据同步失败:', e)
+  }
 
   return u
 }
@@ -91,6 +96,12 @@ export async function register(data: RegisterRequest): Promise<UserInfo> {
   user.value = u
   localStorage.setItem('myllm_user', JSON.stringify(u))
   isLoggedIn.value = true
+
+  try {
+    await syncLocalData()
+  } catch (e) {
+    console.warn('[Auth] 本地数据同步失败:', e)
+  }
 
   return u
 }

@@ -5,7 +5,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "ModelConfig")
+@Table(name = "model_config")
 @Data
 public class ModelConfig {
 
@@ -13,37 +13,42 @@ public class ModelConfig {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "UserId")
+    @Column(name = "user_id")
     private Long userId;
 
-    @Column(nullable = false, length = 100)
+    @Column(name = "model_name", nullable = false, length = 100)
     private String modelName;
 
     @Column(nullable = false, length = 50)
     private String provider;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(name = "api_key_encrypted", columnDefinition = "TEXT")
     private String apiKeyEncrypted;
 
-    @Column(length = 500)
+    @Column(name = "base_url", length = 500)
     private String baseUrl;
 
+    @Column(name = "max_tokens")
     private Integer maxTokens = 4096;
 
     @Column(columnDefinition = "TEXT")
     private String prompt;
 
+    @Column(name = "is_enabled")
     private Integer isEnabled = 1;
 
     /** 用户给模型取的显示名，用于对话中标注"谁在说话" */
-    @Column(length = 100)
+    @Column(name = "display_name", length = 100)
     private String displayName;
 
     /** 排序序号，多模型对话时按此顺序依次调用 */
+    @Column(name = "sort_order")
     private Integer sortOrder = 0;
 
+    @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
     @PrePersist

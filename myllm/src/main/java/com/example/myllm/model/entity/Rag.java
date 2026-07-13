@@ -5,7 +5,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "Rag")
+@Table(name = "rag")
 @Data
 public class Rag {
 
@@ -13,7 +13,7 @@ public class Rag {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "UserId")
+    @Column(name = "user_id")
     private Long userId;
 
     @Column(nullable = false, length = 500)
