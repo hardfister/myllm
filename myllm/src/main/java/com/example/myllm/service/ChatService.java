@@ -146,8 +146,9 @@ public class ChatService {
             String displayName = mc.getDisplayName() != null && !mc.getDisplayName().isBlank()
                     ? mc.getDisplayName() : mc.getModelName();
 
-            // 多模型时：告诉当前模型前面已经有哪些人说过什么
-            String systemPrompt = buildSystemPrompt(mc, ragContext.toString());
+            // 构建 System Prompt: 模型自带 prompt + RAG + 多角色声明
+            String systemPrompt = buildSystemPrompt(mc, ragContext.toString(),
+                    enabledModels);
 
             System.out.println("[" + sessionId + "] → 调用「" + displayName
                     + "」(上下文长度: " + conversationLog.length() + " 字)");
@@ -375,7 +376,7 @@ public class ChatService {
             System.out.println("[" + finalSessionId + "] 流式 → 「" + displayName + "」");
 
             String aiReply = callSingleModelStream(mc, conversationLog.toString(),
-                    buildSystemPrompt(mc, ragContext.toString()),
+                    buildSystemPrompt(mc, ragContext.toString(), enabledModels),
                     token -> onEvent.accept("token", token),
                     finalSessionId, displayName);
 
@@ -575,13 +576,55 @@ public class ChatService {
         sessions.remove(sessionId);
     }
 
-    private String buildSystemPrompt(ModelConfig model, String ragContext) {
+    private String buildSystemPrompt(ModelConfig model, String ragContext,
+                                       List<ModelConfig> allModels) {
+        String displayName = model.getDisplayName() != null && !model.getDisplayName().isBlank()
+                ? model.getDisplayName() : model.getModelName();
         StringBuilder sb = new StringBuilder();
+
+        // 1. 模型自带的 Prompt
         if (model.getPrompt() != null && !model.getPrompt().isBlank()) sb.append(model.getPrompt());
+
+        // 2. RAG 知识库上下文
         if (!ragContext.isEmpty()) {
             if (sb.length() > 0) sb.append("\n\n");
             sb.append("【参考知识库内容】\n").append(ragContext);
         }
+
+        // 3. 多模型（≥2）时追加角色声明
+        if (allModels != null && allModels.size() >= 2) {
+            if (sb.length() > 0) sb.append("\n\n");
+
+            // 列出所有参与者：用户 + 各个模型
+            List<String> names = new ArrayList<>();
+            names.add("用户");
+            for (ModelConfig m : allModels) {
+                String n = m.getDisplayName() != null && !m.getDisplayName().isBlank()
+                        ? m.getDisplayName() : m.getModelName();
+                names.add(n);
+            }
+            String participants = String.join("、", names);
+
+            // 排序说明
+            List<String> ordered = new ArrayList<>();
+            for (int i = 0; i < allModels.size(); i++) {
+                ModelConfig m = allModels.get(i);
+                String n = m.getDisplayName() != null && !m.getDisplayName().isBlank()
+                        ? m.getDisplayName() : m.getModelName();
+                ordered.add((i + 1) + "." + n);
+            }
+
+            sb.append("【多角色对话声明】\n");
+            sb.append("现在是多角色对话状态，共 ").append(1 + allModels.size())
+              .append(" 个角色参与：").append(participants).append("。\n");
+            sb.append("发言次序：用户提问 → ")
+              .append(String.join(" → ", ordered)).append("。\n");
+            sb.append("你就是「").append(displayName).append("」，只代表你自己一个人。\n");
+            sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话。\n");
+            sb.append("仅允许：以「").append(displayName).append(": 内容」格式回复你自己的观点。\n");
+            sb.append("请先阅读全部对话记录（包括其他模型已说的话），然后给出独立判断回复。");
+        }
+
         return sb.toString();
     }
 
