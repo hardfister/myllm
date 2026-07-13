@@ -473,6 +473,7 @@ public class ChatService {
                         Map<String, Object> ai = new LinkedHashMap<>();
                         ai.put("role", role);
                         ai.put("content", content);
+                        ai.put("modelId", m.getModelId());
                         ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
                         result.add(ai);
                     }
@@ -481,6 +482,7 @@ public class ChatService {
                     Map<String, Object> ai = new LinkedHashMap<>();
                     ai.put("role", "assistant");
                     ai.put("content", aiText);
+                    ai.put("modelId", m.getModelId());
                     ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
                     result.add(ai);
                 }

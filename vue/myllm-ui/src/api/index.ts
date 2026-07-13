@@ -153,6 +153,7 @@ export interface ChatResponse {
 export interface SessionMessage {
   role: string
   content: string
+  modelId?: number
   timestamp?: string
 }
 

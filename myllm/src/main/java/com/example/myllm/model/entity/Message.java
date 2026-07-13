@@ -22,6 +22,9 @@ public class Message {
     @Column(name = "ai_response", columnDefinition = "TEXT")
     private String aiResponse;
 
+    @Column(name = "model_id")
+    private Long modelId;
+
     @Column(name = "tokens_used")
     private Integer tokensUsed = 0;
 

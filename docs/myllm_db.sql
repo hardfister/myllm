@@ -126,6 +126,7 @@ CREATE TABLE `session` (
 CREATE TABLE message (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_id      BIGINT NOT NULL,
+    model_id        BIGINT,
     user_message    TEXT   NOT NULL,
     ai_response     TEXT,
     tokens_used     INT    DEFAULT 0,

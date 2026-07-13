@@ -54,6 +54,7 @@ public class SessionPersistenceService {
             msg.setSessionId(session.getId());
             msg.setUserMessage(userMsg);
             msg.setAiResponse(aiReply);
+            msg.setModelId(model != null ? model.getId() : null);
             int tokens = Math.max(1, (userMsg.length() + (aiReply != null ? aiReply.length() : 0)) / 2);
             msg.setTokensUsed(tokens);
             messageRepo.save(msg);
