@@ -260,6 +260,58 @@ export function embedRag(id: number, modelId: number): Promise<{ data: Rag }> {
 export function sendChatMessage(content: string, sessionId?: string): Promise<{ data: ChatResponse }> {
   return api.post('/api/chat', { content, sessionId })
 }
+
+/** SSE 流式聊天 — 返回 ReadableStream，逐 token 推送 */
+export function sendChatMessageStream(
+  content: string,
+  sessionId: string | undefined,
+  onStartModel: (displayName: string) => void,
+  onToken: (displayName: string, token: string) => void,
+  onEndModel: (displayName: string) => void,
+  onDone: (sessionId: string) => void,
+  onError: (err: string) => void
+): AbortController {
+  const controller = new AbortController()
+  fetch('http://localhost:8080/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, sessionId }),
+    signal: controller.signal
+  }).then(async (resp) => {
+    if (!resp.ok || !resp.body) { onError('HTTP ' + resp.status); return }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let currentModel = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // 解析 SSE: "event: xxx\ndata: yyy\n\n"
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+      for (const part of parts) {
+        const lines = part.split('\n')
+        let eventType = ''
+        let eventData = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7)
+          else if (line.startsWith('data: ')) eventData = line.slice(6).replace(/\\n/g, '\n')
+        }
+        if (eventType === 'start_model') { currentModel = eventData; onStartModel(eventData) }
+        else if (eventType === 'token') { onToken(currentModel, eventData) }
+        else if (eventType === 'end_model') { onEndModel(eventData) }
+        else if (eventType === 'done') { onDone(eventData) }
+        else if (eventType === 'error') { onError(eventData) }
+      }
+    }
+  }).catch((e) => {
+    if (e.name !== 'AbortError') onError(e.message || '连接失败')
+  })
+  return controller
+}
+
 export function newSession(): Promise<{ data: ChatResponse }> {
   return api.post('/api/chat/new')
 }

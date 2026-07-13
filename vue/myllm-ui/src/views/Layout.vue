@@ -16,7 +16,7 @@ import RagList from './RagList.vue'
 import ModelList from './ModelList.vue'
 import MemList from './MemList.vue'
 import LoginModal from './LoginModal.vue'
-import { sendChatMessage, newSession, clearSession, listSessions, deleteSession, getSessionMessages } from '../api'
+import { sendChatMessage, sendChatMessageStream, newSession, clearSession, listSessions, deleteSession, getSessionMessages } from '../api'
 import type { ChatResponse, ChatMessage, HistorySession, SessionMessage } from '../api'
 import { useAuth, checkAuth, logout } from '../services/auth'
 import {
@@ -40,6 +40,7 @@ const listReloadKey = ref(0)
 const sessionId = ref('')
 const messages = ref<ChatMessage[]>([])
 const isStreaming = ref(false)
+const streamingAbort = ref<AbortController | null>(null)
 const chatBodyRef = ref<HTMLElement | null>(null)
 
 // ===== 历史记录状态 =====
@@ -110,8 +111,8 @@ const openHistorySession = async (item: HistorySession) => {
   }
 }
 
-// ===== 发送消息 =====
-const sendMessage = async () => {
+// ===== 发送消息（流式 SSE） =====
+const sendMessage = () => {
   const text = messageText.value.trim()
   if (!text || isStreaming.value) return
 
@@ -120,55 +121,43 @@ const sendMessage = async () => {
   messageText.value = ''
   isStreaming.value = true
 
-  try {
-    const res = await sendChatMessage(text, sessionId.value || undefined)
-    const data: ChatResponse = res.data
-    if (data.sessionId && !sessionId.value) sessionId.value = data.sessionId
-
-    if (data.error) {
-      messages.value.push({ role: 'error', content: '⚠️ ' + data.error, timestamp: new Date().toISOString() })
-    } else if (data.replies && data.replies.length > 0) {
-      // 多模型接力回复 — 每个模型一条气泡
-      for (const r of data.replies) {
-        messages.value.push({
-          role: 'assistant',
-          content: r.content || '(空回复)',
-          modelUsed: r.displayName || r.model,
-          sources: data.sources,
-          timestamp: new Date().toISOString()
-        })
-      }
-    } else {
+  // 使用流式 SSE — 每个模型逐 token 输出
+  streamingAbort.value = sendChatMessageStream(
+    text,
+    sessionId.value || undefined,
+    // onStartModel: 创建一条新的空 AI 气泡
+    (displayName: string) => {
       messages.value.push({
-        role: 'assistant', content: data.reply || '(空回复)',
-        modelUsed: data.modelUsed, sources: data.sources, timestamp: new Date().toISOString()
+        role: 'assistant',
+        content: '',
+        modelUsed: displayName,
+        timestamp: new Date().toISOString()
       })
+    },
+    // onToken: 追加 token 到当前气泡
+    (_displayName: string, token: string) => {
+      const last = messages.value[messages.value.length - 1]
+      if (last && last.role === 'assistant') {
+        last.content += token
+      }
+    },
+    // onEndModel: 标记完成
+    (_displayName: string) => {
+      // 气泡已完整
+    },
+    // onDone: 拿到 sessionId + 刷新历史
+    (newSessionId: string) => {
+      if (newSessionId && !sessionId.value) sessionId.value = newSessionId
+      isStreaming.value = false
+      if (isLoggedIn.value) loadHistorySessions()
+      streamingAbort.value = null
+    },
+    // onError
+    (err: string) => {
+      messages.value.push({ role: 'error', content: '⚠️ ' + err, timestamp: new Date().toISOString() })
+      isStreaming.value = false
     }
-
-    // 发送成功后刷新历史记录列表（可能新增了会话）
-    if (isLoggedIn.value) await loadHistorySessions()
-  } catch (e: any) {
-    // 精确错误分类 — 不把所有异常都报成"连接失败"
-    let errMsg: string
-    if (e.code === 'ECONNABORTED') {
-      errMsg = '服务器超时：请求时间过长，请稍后重试'
-    } else if (e.response) {
-      // 后端返回了 HTTP 错误响应（401/500 等）
-      const status = e.response.status
-      const backendMsg = e.response.data?.error || e.response.data?.message || ''
-      if (status === 401) errMsg = '认证失败：登录已过期，请重新登录'
-      else if (status === 403) errMsg = '权限不足：' + (backendMsg || '无权访问此接口')
-      else if (status >= 500) errMsg = '服务器内部错误：' + (backendMsg || '请查看后端日志')
-      else errMsg = '请求失败 (HTTP ' + status + ')：' + (backendMsg || e.message)
-    } else if (e.message === 'Network Error' || !e.response) {
-      errMsg = '连接失败：无法连接到后端服务，请确认后端已启动在 localhost:8080'
-    } else {
-      errMsg = '请求异常：' + e.message
-    }
-    messages.value.push({ role: 'error', content: '⚠️ ' + errMsg, timestamp: new Date().toISOString() })
-  } finally {
-    isStreaming.value = false
-  }
+  )
 }
 
 // ===== 删除历史会话（二次确认） =====

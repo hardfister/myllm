@@ -3,8 +3,10 @@ package com.example.myllm.controller;
 import com.example.myllm.model.dto.ChatRequest;
 import com.example.myllm.model.dto.ChatResponse;
 import com.example.myllm.service.ChatService;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.PrintWriter;
 import java.util.List;
 import java.util.Map;
 
@@ -39,6 +41,35 @@ public class ChatController {
         System.out.println("[CHAT] 收到消息 | session=" + request.getSessionId()
                 + " | 内容=" + userMessage.substring(0, Math.min(50, userMessage.length())));
         return chatService.chat(userMessage, request.getSessionId());
+    }
+
+    /** 流式聊天 — SSE 格式，逐 token 推送 */
+    @PostMapping("/api/chat/stream")
+    public void handleChatStream(@RequestBody ChatRequest request, HttpServletResponse response) throws Exception {
+        String userMessage = request.getContent();
+        if (userMessage == null || userMessage.isBlank()) {
+            response.setStatus(400);
+            response.getWriter().write("data: {\"error\":\"消息内容不能为空\"}\n\n");
+            return;
+        }
+
+        response.setContentType("text/event-stream");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("X-Accel-Buffering", "no");
+        PrintWriter out = response.getWriter();
+
+        chatService.chatStream(userMessage, request.getSessionId(),
+                (type, data) -> {
+                    try {
+                        out.write("event: " + type + "\ndata: " + data.replace("\n", "\\n") + "\n\n");
+                        out.flush();
+                    } catch (Exception e) {
+                        // 客户端断开连接
+                    }
+                });
+
+        out.close();
     }
 
     /** 新建空会话，返回新 sessionId */

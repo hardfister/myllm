@@ -3,7 +3,11 @@ package com.example.myllm.service;
 import com.example.myllm.model.dto.ChatResponse;
 import com.example.myllm.model.entity.*;
 import com.example.myllm.repository.*;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.langchain4j.model.output.Response;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -12,8 +16,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.net.ConnectException;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -126,20 +133,27 @@ public class ChatService {
         // 6. 保存用户消息到历史
         history.add(Map.of("role", "user", "content", userMessage));
 
-        // 7. 依次调用每个启用的模型
+        // 7. 依次调用每个启用的模型，每个模型看到之前所有的对话
         List<Map<String, String>> replies = new ArrayList<>();
-        String cumulativePrompt = historyText.length() > 0
-                ? historyText + "user: " + userMessage : userMessage;
+        // 对话记录：用户消息作为起点，后续每个模型的回复依次追加
+        StringBuilder conversationLog = new StringBuilder();
+        if (historyText.length() > 0) {
+            conversationLog.append(historyText);
+        }
+        conversationLog.append("user: ").append(userMessage).append("\n");
 
         for (ModelConfig mc : enabledModels) {
             String displayName = mc.getDisplayName() != null && !mc.getDisplayName().isBlank()
                     ? mc.getDisplayName() : mc.getModelName();
 
-            // 构建该模型的 System Prompt
+            // 多模型时：告诉当前模型前面已经有哪些人说过什么
             String systemPrompt = buildSystemPrompt(mc, ragContext.toString());
 
-            // 调用
-            String aiReply = callSingleModel(mc, cumulativePrompt, systemPrompt, sessionId,
+            System.out.println("[" + sessionId + "] → 调用「" + displayName
+                    + "」(上下文长度: " + conversationLog.length() + " 字)");
+
+            // 将当前完整对话记录传给模型
+            String aiReply = callSingleModel(mc, conversationLog.toString(), systemPrompt, sessionId,
                     enabledModels.size() > 1 ? displayName : null);
 
             if (aiReply != null) {
@@ -149,9 +163,13 @@ public class ChatService {
                 reply.put("content", aiReply);
                 replies.add(reply);
 
-                // 将该模型的回复追加到上下文，下一个模型能看到
+                // 关键：将模型回复以标注身份的方式追加到对话记录
                 String roleTag = enabledModels.size() > 1 ? displayName : "assistant";
+                conversationLog.append(roleTag).append(": ").append(aiReply).append("\n");
                 history.add(Map.of("role", roleTag, "content", aiReply));
+            } else {
+                // 调用失败也记录在对话中，让后续模型知道
+                conversationLog.append(displayName).append(": [调用失败，无回复]\n");
             }
         }
 
@@ -228,13 +246,174 @@ public class ChatService {
             System.out.println("[" + sessionId + "] 「" + label + "」(" + modelName + ")"
                     + " 回复长度: " + (reply != null ? reply.length() : 0));
 
-            // 将当前模型的回复追加到累计 prompt, 供下一个模型使用
             return reply;
         } catch (Exception e) {
             String errorMsg = classifyError(e);
             System.err.println("[" + sessionId + "] 「" + mc.getModelName() + "」调用失败: " + errorMsg);
             return "[" + mc.getModelName() + " 调用失败: " + errorMsg + "]";
         }
+    }
+
+    /** 流式调用单个模型 — 每收到一个 token 回调 onToken */
+    private String callSingleModelStream(ModelConfig mc, String prompt, String systemPrompt,
+                                          Consumer<String> onToken, String sessionId, String label) {
+        String baseUrl = mc.getBaseUrl() != null && !mc.getBaseUrl().isBlank()
+                ? mc.getBaseUrl() : "https://api.deepseek.com/v1";
+        String apiKey = mc.getApiKeyEncrypted();
+        if (apiKey == null || apiKey.isBlank()) {
+            System.err.println("[流式] 「" + mc.getModelName() + "」未配置 API Key");
+            return null;
+        }
+        String modelName = mc.getModelName() != null && !mc.getModelName().isBlank()
+                ? mc.getModelName() : "deepseek-chat";
+        int maxTokens = mc.getMaxTokens() != null ? mc.getMaxTokens() : 4096;
+
+        try {
+            OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
+                    .baseUrl(baseUrl).apiKey(apiKey).modelName(modelName)
+                    .temperature(0.7).maxTokens(maxTokens)
+                    .timeout(Duration.ofSeconds(120)).build();
+
+            CompletableFuture<String> future = new CompletableFuture<>();
+            StringBuilder fullReply = new StringBuilder();
+
+            StreamingResponseHandler<AiMessage> handler = new StreamingResponseHandler<>() {
+                @Override
+                public void onNext(String token) {
+                    fullReply.append(token);
+                    onToken.accept(token);
+                }
+                @Override
+                public void onComplete(Response<AiMessage> response) {
+                    future.complete(fullReply.toString());
+                }
+                @Override
+                public void onError(Throwable error) {
+                    future.completeExceptionally(error);
+                }
+            };
+
+            if (systemPrompt != null && !systemPrompt.isBlank()) {
+                model.generate(
+                    List.of(dev.langchain4j.data.message.SystemMessage.from(systemPrompt),
+                            dev.langchain4j.data.message.UserMessage.from(prompt)),
+                    handler);
+            } else {
+                model.generate(prompt, handler);
+            }
+
+            String result = future.get(120, TimeUnit.SECONDS);
+            System.out.println("[" + sessionId + "] 「流式」" + label + " 回复长度: " + result.length());
+            return result;
+
+        } catch (Exception e) {
+            System.err.println("[" + sessionId + "] 「流式」" + label + " 失败: " + e.getMessage());
+            return "[" + mc.getModelName() + " 调用失败: " + e.getMessage() + "]";
+        }
+    }
+
+    /**
+     * 流式多模型对话 — 每个模型的回复逐 token 输出。
+     *
+     * SSE 格式回调: onEvent(type, data)
+     *    type: "start_model" / "token" / "end_model" / "done" / "error"
+     *    data: displayName 或 token 文本 或 error 消息
+     */
+    public void chatStream(String userMessage, String sessionId,
+                            java.util.function.BiConsumer<String, String> onEvent) {
+        boolean dbSessionExists = false;
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = UUID.randomUUID().toString().substring(0, 8);
+        } else {
+            dbSessionExists = (sessionRepo.findBySessionName(sessionId) != null);
+        }
+
+        List<ModelConfig> enabledModels = modelConfigRepo.findAllByOrderByUpdatedAtDesc().stream()
+                .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
+                .sorted(Comparator.comparingInt(m -> m.getSortOrder() != null ? m.getSortOrder() : 0))
+                .collect(Collectors.toList());
+
+        if (enabledModels.isEmpty()) {
+            onEvent.accept("error", "没有启用的模型配置");
+            return;
+        }
+
+        // RAG
+        List<Rag> enabledRags = ragRepo.findAllByOrderByCreatedAtDesc().stream()
+                .filter(r -> r.getIsEnabled() != null && r.getIsEnabled() == 1)
+                .collect(Collectors.toList());
+        List<String> sources = new ArrayList<>();
+        StringBuilder ragContext = buildRagContext(userMessage, enabledRags, sources);
+
+        // 记忆
+        MemoryConfig activeMemory = memoryRepo.findAllByOrderByUpdatedAtDesc().stream()
+                .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
+                .findFirst().orElse(null);
+        List<Map<String, String>> history = getOrCreateHistory(sessionId);
+        if (dbSessionExists && history.isEmpty()) loadHistoryFromDb(sessionId, history);
+        List<Map<String, String>> ctxMsgs = applyMemoryStrategy(history, activeMemory);
+        StringBuilder historyText = new StringBuilder();
+        for (Map<String, String> msg : ctxMsgs) {
+            historyText.append(msg.get("role")).append(": ").append(msg.get("content")).append("\n");
+        }
+        if (!historyText.isEmpty()) historyText.append("\n");
+
+        history.add(Map.of("role", "user", "content", userMessage));
+
+        // 对话记录
+        StringBuilder conversationLog = new StringBuilder(historyText);
+        conversationLog.append("user: ").append(userMessage).append("\n");
+
+        // 依次流式调用每个模型
+        final String finalSessionId = sessionId;
+        for (int idx = 0; idx < enabledModels.size(); idx++) {
+            ModelConfig mc = enabledModels.get(idx);
+            String displayName = mc.getDisplayName() != null && !mc.getDisplayName().isBlank()
+                    ? mc.getDisplayName() : mc.getModelName();
+
+            onEvent.accept("start_model", displayName);
+            System.out.println("[" + finalSessionId + "] 流式 → 「" + displayName + "」");
+
+            String aiReply = callSingleModelStream(mc, conversationLog.toString(),
+                    buildSystemPrompt(mc, ragContext.toString()),
+                    token -> onEvent.accept("token", token),
+                    finalSessionId, displayName);
+
+            if (aiReply != null) {
+                conversationLog.append(displayName).append(": ").append(aiReply).append("\n");
+                history.add(Map.of("role", displayName, "content", aiReply));
+            } else {
+                conversationLog.append(displayName).append(": [调用失败，无回复]\n");
+            }
+            onEvent.accept("end_model", displayName);
+        }
+
+        onEvent.accept("done", finalSessionId);
+        saveChatAsync(userMessage, sessionId, !dbSessionExists, history, activeMemory, enabledRags, enabledModels.get(0));
+    }
+
+    /** 异步持久化（与 chat 共享） */
+    private void saveChatAsync(String userMessage, String sessionId, boolean isNew,
+                                List<Map<String, String>> history, MemoryConfig mem,
+                                List<Rag> rags, ModelConfig mc) {
+        List<Map<String, String>> aiMsgs = history.stream()
+                .filter(m -> !"user".equals(m.get("role"))).collect(Collectors.toList());
+        String combinedAi = aiMsgs.stream()
+                .map(m -> "[" + m.get("role") + "] " + m.get("content"))
+                .collect(Collectors.joining("\n\n"));
+        Rag firstRag = rags.isEmpty() ? null : rags.get(0);
+        new Thread(() -> {
+            try {
+                Long dbId = persistenceService.saveSessionAndMessage(
+                        sessionId, isNew, userMessage, combinedAi, mc, mem, firstRag);
+                if (isNew && dbId != null) {
+                    String title = generateTitleFromModel(mc, userMessage, combinedAi);
+                    if (title != null) persistenceService.updateTitle(dbId, title);
+                }
+            } catch (Exception e) {
+                System.err.println("[DB] 异步持久化异常: " + e.getMessage());
+            }
+        }, "db-persist-stream-" + sessionId).start();
     }
 
     // ==================== 历史记录 API ====================

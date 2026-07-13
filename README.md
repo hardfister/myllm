@@ -288,6 +288,90 @@ npm run build
 - `npm run build` 通过
 - 已知非阻断提示：`GenericJackson2JsonRedisSerializer` 过时警告；Vite 提示 `auth.ts` 动态导入不会拆成独立 chunk
 
+## 开发中遇到的问题与解决方法
+
+### 1. Hibernate 列名映射冲突（PascalCase vs snake_case）
+
+**现象**：`Field 'SessionId' doesn't have a default value`，Message 表写入失败。
+
+**根因**：`myllm_db.sql` 原始建表使用 PascalCase（`SessionId`、`UserId`），而 Hibernate 默认将 camelCase 转 snake_case（`session_id`）。`ddl-auto: update` 不会重命名已有列，导致表中同时存在 `SessionId`（旧、NOT NULL）和 `session_id`（新），INSERT 时新列无值报错。
+
+**解决**：将 SQL 脚本和全部 JPA 实体统一为 snake_case（`user_id`、`session_id`、`model_id` 等），删库重建：
+
+```sql
+mysql -u root -p < docs/myllm_db.sql
+```
+
+### 2. @Transactional 在 private 方法上不生效
+
+**现象**：聊天回复正常，但 Session/Message 表始终没有数据。
+
+**根因**：`ChatService.chat()` 标注了 `@Transactional`，内部调用 `persistSessionAndMessage()` 是 private 方法。Spring AOP 代理只能拦截 public 方法，private 方法的 `@Transactional` 完全被跳过。
+
+**解决**：抽取 `SessionPersistenceService` 为独立 `@Service` Bean，所有写操作改为 public + `@Transactional`。同时持久化逻辑放到异步线程中执行，DB 写入失败不阻断聊天回复。
+
+### 3. Spring AI 依赖启动失败
+
+**现象**：`APPLICATION FAILED TO START` — OpenAI 自动配置要求 API Key。
+
+**根因**：`spring-ai-starter-model-openai` 启动时自动创建 `openAiChatModel` Bean，OpenAI Java SDK 强制要求 `apiKey`，未配置即抛 `IllegalStateException`。Spring AI 1.0.0-M6 也尚未发布到 Maven Central。
+
+**解决**：移除 Spring AI starter，改为 `java.net.http.HttpClient` 直接调 Ollama/Chroma/OpenAI Embedding REST API，用 `jackson-databind` 做 JSON 序列化。
+
+### 4. multipart 文件上传失败（三重原因）
+
+**现象**：知识库上传文件提示"上传失败"。
+
+**根因**：
+1. axios 手动设 `Content-Type: multipart/form-data` → 缺少 `boundary` 参数 → Spring 无法解析
+2. Spring Security 拦截 `/api/rags/**` 要求认证 → 未登录时 401
+3. Spring 默认 `max-file-size: 1MB` → 大文件 `MaxUploadSizeExceededException`
+
+**解决**：
+1. 不设 Content-Type，浏览器自动加 boundary
+2. `/api/rags/**` 改为 `permitAll()`
+3. `application.yml` 设置 `max-file-size: 50MB`
+
+### 5. 上传与向量化耦合导致 500
+
+**现象**：即使 Chroma 正常运行，上传仍然失败。
+
+**根因**：`createRag()` 标注 `@Transactional`，Ollama embedding 或 Chroma upsert 抛异常 → 整个事务回滚 → MySQL 的 rag.save() 也被撤销 → 500。
+
+**解决**：上传只保存文件+切片到 MySQL（status=pending），向量化改为独立操作（`POST /api/rags/{id}/embed?modelId=xx`），用户手动选择嵌入模型后点击向量化。
+
+### 6. Redis 缓存 LocalDateTime 序列化失败
+
+**现象**：`Could not write JSON: Java 8 date/time type java.time.LocalDateTime not supported`，所有带 `@Cacheable` 的接口 500。
+
+**根因**：`GenericJackson2JsonRedisSerializer` 内置的 ObjectMapper 不支持 `LocalDateTime`，缺少 `jackson-datatype-jsr310` 模块。
+
+**解决**：`pom.xml` 添加 `jackson-datatype-jsr310` 依赖，`RedisCacheConfig` 中 `mapper.registerModule(new JavaTimeModule())`。
+
+### 7. 历史会话加载为空 + 对话无记忆
+
+**现象**：点击历史会话 → 消息列表空白，继续对话无上下文。
+
+**根因**：前端 `openHistorySession()` 只设置 sessionId 未加载消息；后端 `chat()` 只从内存 HashMap 读历史，未从 DB 恢复。
+
+**解决**：新增 `GET /api/sessions/{sessionId}/messages` API，前端打开历史会话时调 API 加载气泡；后端 `chat()` 检测 sessionId 在 DB 存在但内存为空时自动从 DB 恢复到内存。
+
+### 8. 登录后仍显示本地数据
+
+**现象**：登录后刷新页面，模型/记忆/知识库列表显示旧数据而非服务器最新数据。
+
+**根因**：`loadXxxData()` 的 catch 块兜底 `loadXxx()` 读 localStorage，同时服务器写操作后额外 `saveXxx()` 到 local，导致旧数据反复被回读。
+
+**解决**：已登录时 catch → 空数组（不兜底本地）；所有 `saveXxx()` 调用仅保留在未登录分支。登录后数据来源只有一个：MySQL。
+
+### 9. SQL 测试数据 UTF-8 编码损坏
+
+**现象**：`ERROR 1366: Incorrect string value '\x80\xE4...' for column 'prompt'`。
+
+**根因**：INSERT 语句中的中文字符在 Git CRLF 转换过程中出现损坏字节。
+
+**解决**：删除 SQL 中所有 INSERT 测试数据，表结构完整保留，用户通过前端 UI 注册并录入数据。
+
 ## License
 
 MIT
