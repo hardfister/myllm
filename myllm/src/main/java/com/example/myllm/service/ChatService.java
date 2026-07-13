@@ -455,11 +455,35 @@ public class ChatService {
             result.add(user);
 
             if (m.getAiResponse() != null && !m.getAiResponse().isEmpty()) {
-                Map<String, Object> ai = new LinkedHashMap<>();
-                ai.put("role", "assistant");
-                ai.put("content", m.getAiResponse());
-                ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
-                result.add(ai);
+                String aiText = m.getAiResponse();
+                // 多模型格式: "[角色A] 内容A\n\n[角色B] 内容B" → 拆为独立气泡
+                if (aiText.contains("\n\n[") || aiText.startsWith("[")) {
+                    String[] parts = aiText.split("\\n\\n(?=\\[)");
+                    for (String part : parts) {
+                        String content = part.trim();
+                        String role = "assistant";
+                        // 提取 [displayName] 前缀
+                        if (content.startsWith("[")) {
+                            int endBracket = content.indexOf("] ");
+                            if (endBracket > 0) {
+                                role = content.substring(1, endBracket);
+                                content = content.substring(endBracket + 2);
+                            }
+                        }
+                        Map<String, Object> ai = new LinkedHashMap<>();
+                        ai.put("role", role);
+                        ai.put("content", content);
+                        ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
+                        result.add(ai);
+                    }
+                } else {
+                    // 单模型或单条回复
+                    Map<String, Object> ai = new LinkedHashMap<>();
+                    ai.put("role", "assistant");
+                    ai.put("content", aiText);
+                    ai.put("timestamp", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
+                    result.add(ai);
+                }
             }
         }
         return result;
@@ -513,6 +537,7 @@ public class ChatService {
     }
 
     /** 从 DB 加载历史消息到内存 */
+    /** 从 DB 加载历史消息到内存，多模型回复按 [角色名] 拆分为独立条目 */
     private void loadHistoryFromDb(String sessionId, List<Map<String, String>> history) {
         Session dbSession = sessionRepo.findBySessionName(sessionId);
         if (dbSession != null) {
@@ -520,10 +545,26 @@ public class ChatService {
             for (Message m : pastMsgs) {
                 history.add(Map.of("role", "user", "content", m.getUserMessage()));
                 if (m.getAiResponse() != null && !m.getAiResponse().isEmpty()) {
-                    history.add(Map.of("role", "assistant", "content", m.getAiResponse()));
+                    String aiText = m.getAiResponse();
+                    if (aiText.contains("\n\n[") || aiText.startsWith("[")) {
+                        for (String part : aiText.split("\\n\\n(?=\\[)")) {
+                            String content = part.trim();
+                            String role = "assistant";
+                            if (content.startsWith("[")) {
+                                int end = content.indexOf("] ");
+                                if (end > 0) {
+                                    role = content.substring(1, end);
+                                    content = content.substring(end + 2);
+                                }
+                            }
+                            history.add(Map.of("role", role, "content", content));
+                        }
+                    } else {
+                        history.add(Map.of("role", "assistant", "content", aiText));
+                    }
                 }
             }
-            System.out.println("[记忆] 从 DB 加载 " + pastMsgs.size() + " 条消息");
+            System.out.println("[记忆] 从 DB 加载 " + pastMsgs.size() + " 轮对话到内存");
         }
     }
 
@@ -621,7 +662,7 @@ public class ChatService {
               .append(String.join(" → ", ordered)).append("。\n");
             sb.append("你就是「").append(displayName).append("」，只代表你自己一个人。\n");
             sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话。\n");
-            sb.append("仅允许：以「").append(displayName).append(": 内容」格式回复你自己的观点。\n");
+            sb.append("仅允许：以").append(displayName).append("的角度回复你自己的观点。\n");
             sb.append("请先阅读全部对话记录（包括其他模型已说的话），然后给出独立判断回复。");
         }
 

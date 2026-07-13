@@ -100,11 +100,17 @@ const openHistorySession = async (item: HistorySession) => {
     try {
       const res = await getSessionMessages(item.sessionId)
       const historyMsgs = res.data as SessionMessage[]
-      messages.value = historyMsgs.map(m => ({
-        role: m.role as ChatMessage['role'],
-        content: m.content,
-        timestamp: m.timestamp
-      }))
+      messages.value = historyMsgs.map(m => {
+        // 识别多模型角色名，显示名放入 modelUsed
+        const isUser = m.role === 'user'
+        const isKnownRole = ['user', 'assistant', 'error', 'system'].includes(m.role)
+        return {
+          role: (isUser ? 'user' : 'assistant') as ChatMessage['role'],
+          content: m.content,
+          modelUsed: isKnownRole ? undefined : m.role,  // 多模型标识
+          timestamp: m.timestamp
+        }
+      })
     } catch (e) {
       console.error('加载历史消息失败:', e)
     }
