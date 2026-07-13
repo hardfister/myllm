@@ -55,6 +55,10 @@ public class Rag {
     @Column(name = "is_enabled")
     private Integer isEnabled = 1;
 
+    /** 使用的嵌入模型 ID（NULL=未向量化，关联 ModelConfig 表） */
+    @Column(name = "embedding_model_id")
+    private Long embeddingModelId;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

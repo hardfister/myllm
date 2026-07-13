@@ -68,4 +68,10 @@ public class RagController {
     public Rag toggleRag(@PathVariable Long id) {
         return ragService.toggleRag(id);
     }
+
+    /** 向量化指定文档 — 使用指定的嵌入模型 */
+    @PostMapping("/{id}/embed")
+    public Rag embedRag(@PathVariable Long id, @RequestParam("modelId") Long modelId) {
+        return ragService.embedRag(id, modelId);
+    }
 }

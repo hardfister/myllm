@@ -250,6 +250,10 @@ export function deleteRag(id: number): Promise<{ data: string }> {
 export function toggleRag(id: number): Promise<{ data: Rag }> {
   return api.put(`/api/rags/${id}/toggle`)
 }
+/** 向量化指定文档 — 传入嵌入模型 ID */
+export function embedRag(id: number, modelId: number): Promise<{ data: Rag }> {
+  return api.post(`/api/rags/${id}/embed?modelId=${modelId}`)
+}
 
 // ==================== 聊天 ====================
 

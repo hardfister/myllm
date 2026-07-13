@@ -1,6 +1,8 @@
 package com.example.myllm.service;
 
+import com.example.myllm.model.entity.ModelConfig;
 import com.example.myllm.model.entity.Rag;
+import com.example.myllm.repository.ModelConfigRepository;
 import com.example.myllm.repository.RagRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,36 +26,31 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * RAG 知识库服务 — Ollama embedding + Chroma 向量存储
- * ---------------
- * 不依赖 Spring AI starter，直接调 REST API：
- *   Ollama:  POST /api/embeddings  (model: nomic-embed-text)
- *   Chroma:  REST API v2           (collections CRUD, query, upsert)
+ * RAG 知识库服务 — 上传 + 按需向量化 + Chroma 检索
+ * -------------------------------------------------
+ * 上传：文件 → 磁盘 + 提取文本 + 切片 → MySQL (status=pending)
+ * 向量化：用户选择嵌入模型 → 调 OpenAI 兼容 API 生成向量 → Chroma upsert (status=completed)
+ * 检索：用文档关联的嵌入模型生成 query 向量 → Chroma 相似度搜索
  *
- * 流水线：
- *   上传 → 提取文本 → 切片 → Ollama 向量化 → Chroma 存储
- *   检索 → 用户 query → Ollama 向量化 → Chroma 相似度搜索 → Top-K 文段
+ * 嵌入模型由用户在知识库页面下半部分自行配置（复用 ModelList 逻辑）。
  */
 @Service
 public class RagService {
 
     private final RagRepository ragRepository;
+    private final ModelConfigRepository modelConfigRepo;
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+            .connectTimeout(Duration.ofSeconds(10)).build();
 
-    // 配置
-    private static final String OLLAMA_URL = "http://localhost:11434";
-    private static final String EMBEDDING_MODEL = "nomic-embed-text";
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
     private static final String COLLECTION_NAME = "my_knowledge_base";
     private static final String UPLOAD_DIR = "./uploads/";
 
-    private boolean chromaReady = false;  // Chroma 集合是否已创建
-
-    public RagService(RagRepository ragRepository) {
+    public RagService(RagRepository ragRepository,
+                      ModelConfigRepository modelConfigRepo) {
         this.ragRepository = ragRepository;
+        this.modelConfigRepo = modelConfigRepo;
         ensureChromaCollection();
     }
 
@@ -65,14 +62,13 @@ public class RagService {
     }
 
     /**
-     * 上传文档 → 提取文本 → 切片 → 保存 MySQL（立即返回）。
-     * Ollama embedding + Chroma 存储放在异步线程，失败不影响上传。
+     * 上传文档 → 提取文本 → 切片 → MySQL 保存（status=pending）
+     * 不自动向量化，用户需自行选择嵌入模型后点击"向量化"按钮。
      */
     @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public Rag createRag(MultipartFile file, String collectionName,
                           Integer chunkSize, Integer chunkOverlap, String chunkMethod) throws IOException {
-        // 1. 保存到磁盘
         Path uploadPath = Paths.get(UPLOAD_DIR);
         if (!Files.exists(uploadPath)) Files.createDirectories(uploadPath);
         String originalFilename = file.getOriginalFilename();
@@ -81,7 +77,6 @@ public class RagService {
         Path target = uploadPath.resolve(stored);
         file.transferTo(target.toFile());
 
-        // 2. 提取文本 + 切片
         String text = extractText(target);
         int cs = (chunkSize != null && chunkSize > 0) ? chunkSize : 500;
         int co = (chunkOverlap != null && chunkOverlap >= 0) ? chunkOverlap : 50;
@@ -90,9 +85,7 @@ public class RagService {
 
         String collName = (collectionName != null && !collectionName.isBlank())
                 ? collectionName : COLLECTION_NAME;
-        String docId = stored;
 
-        // 3. MySQL 立即保存（无论后续向量化是否成功，记录不丢）
         Rag rag = new Rag();
         rag.setFilename(originalFilename != null ? originalFilename : "unknown");
         rag.setFilePath(target.toAbsolutePath().toString());
@@ -102,43 +95,62 @@ public class RagService {
         rag.setChunkSize(cs); rag.setChunkOverlap(co); rag.setChunkMethod(cm);
         rag.setChunkCount(chunks.size());
         rag.setContent(String.join("\n---CHUNK---\n", chunks));
-        rag.setStatus("pending");  // 等待向量化
+        rag.setStatus("pending");  // 等待用户手动向量化
         rag = ragRepository.save(rag);
 
-        // 4. 异步向量化 — 失败不阻断上传
-        final Long ragId = rag.getId();
-        final String ragFilename = rag.getFilename();
-        final String ragDocId = docId;
-        new Thread(() -> {
-            try {
-                ragRepository.findById(ragId).ifPresent(r -> {
-                    r.setStatus("embedding"); ragRepository.save(r);
-                });
-                for (int i = 0; i < chunks.size(); i++) {
-                    float[] vector = embed(chunks.get(i));
-                    if (vector != null) {
-                        chromaUpsert(ragDocId + "_chunk_" + i, vector, Map.of(
-                                "source", ragFilename, "chunk_index", i,
-                                "rag_id", ragId, "text", chunks.get(i)));
-                    }
-                }
-                ragRepository.findById(ragId).ifPresent(r -> {
-                    r.setStatus("completed"); ragRepository.save(r);
-                });
-                System.out.println("[RAG] ✅ 文档 " + ragDocId + " 向量化完成: " + chunks.size() + " 个切片");
-            } catch (Exception e) {
-                ragRepository.findById(ragId).ifPresent(r -> {
-                    r.setStatus("failed"); ragRepository.save(r);
-                });
-                System.err.println("[RAG] ❌ 向量化失败(文件已保存): " + e.getMessage());
-            }
-        }, "rag-embed-" + ragId).start();
-
-        System.out.println("[RAG] 📄 文档已接收: " + ragFilename + " (" + chunks.size() + " 切片, 待向量化)");
+        System.out.println("[RAG] 📄 文档已接收: " + originalFilename + " (" + chunks.size() + " 切片, 待向量化)");
         return rag;
     }
 
-    /** 更新文档元数据 + 切片配置（变更时重新向量化） */
+    /**
+     * 向量化指定文档 — 使用用户选择的嵌入模型 API
+     * @param ragId   文档 ID
+     * @param modelId 嵌入模型 ID（ModelConfig 中的一行，需配置 apiKey/baseUrl/modelName）
+     */
+    @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
+    @Transactional
+    public Rag embedRag(Long ragId, Long modelId) {
+        Rag rag = ragRepository.findById(ragId)
+                .orElseThrow(() -> new RuntimeException("文档不存在: " + ragId));
+        ModelConfig embeddingModel = modelConfigRepo.findById(modelId)
+                .orElseThrow(() -> new RuntimeException("嵌入模型不存在: " + modelId));
+
+        if (rag.getContent() == null || rag.getContent().isBlank()) {
+            rag.setStatus("failed");
+            return ragRepository.save(rag);
+        }
+
+        rag.setStatus("embedding");
+        rag.setEmbeddingModelId(modelId);
+        ragRepository.save(rag);
+
+        try {
+            // 还原切片
+            String[] chunks = rag.getContent().split("---CHUNK---");
+            int successCount = 0;
+            for (int i = 0; i < chunks.length; i++) {
+                String chunk = chunks[i].trim();
+                if (chunk.isEmpty()) continue;
+                float[] vector = embedWithModel(chunk, embeddingModel);
+                if (vector != null) {
+                    chromaUpsert("rag_" + ragId + "_chunk_" + i, vector, Map.of(
+                            "source", rag.getFilename(), "chunk_index", i,
+                            "rag_id", ragId, "text", chunk));
+                    successCount++;
+                }
+            }
+            rag.setStatus("completed");
+            System.out.println("[RAG] ✅ 向量化完成: doc=" + rag.getFilename()
+                    + " 切片=" + successCount + "/" + chunks.length
+                    + " 模型=" + embeddingModel.getModelName());
+        } catch (Exception e) {
+            rag.setStatus("failed");
+            System.err.println("[RAG] ❌ 向量化失败: " + e.getMessage());
+        }
+        return ragRepository.save(rag);
+    }
+
+    /** 更新文档元数据 + 切片配置 */
     @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public Rag updateRag(Long id, Rag updated) {
@@ -163,17 +175,7 @@ public class RagService {
             List<String> chunks = chunkText(raw, cs, co, cm);
             ex.setChunkCount(chunks.size());
             ex.setContent(String.join("\n---CHUNK---\n", chunks));
-            // 重新向量化: 删除旧向量 + 写入新向量
-            for (int i = 0; i < chunks.size(); i++) {
-                float[] vec = embed(chunks.get(i));
-                if (vec != null) {
-                    Map<String, Object> meta = Map.of(
-                            "source", ex.getFilename(), "chunk_index", i,
-                            "rag_id", ex.getId(), "text", chunks.get(i));
-                    chromaUpsert("rag_" + ex.getId() + "_chunk_" + i, vec, meta);
-                }
-            }
-            ex.setStatus("completed");
+            ex.setStatus("pending");  // 切片变更后需重新向量化
         }
         return ragRepository.save(ex);
     }
@@ -181,206 +183,198 @@ public class RagService {
     @CacheEvict(value = "rag_list", allEntries = true)
     @Transactional
     public Rag toggleRag(Long id) {
-        Rag t = ragRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("不存在: " + id));
+        Rag t = ragRepository.findById(id).orElseThrow(() -> new RuntimeException("不存在: " + id));
         t.setIsEnabled(t.getIsEnabled() != null && t.getIsEnabled() == 1 ? 0 : 1);
         return ragRepository.save(t);
     }
 
     @Transactional
     public void deleteRag(Long id) {
-        Rag rag = ragRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("不存在: " + id));
+        Rag rag = ragRepository.findById(id).orElseThrow(() -> new RuntimeException("不存在: " + id));
         if (rag.getFilePath() != null) {
             try { Files.deleteIfExists(Paths.get(rag.getFilePath())); }
             catch (IOException e) { /* ignore */ }
         }
-        // Chroma 删除
         for (int i = 0; i < Math.max(rag.getChunkCount(), 100); i++) {
             chromaDelete("rag_" + id + "_chunk_" + i);
         }
         ragRepository.deleteById(id);
     }
 
-    // ===================== RAG 检索（核心） =====================
+    // ===================== 向量检索 =====================
 
     /**
-     * 向量相似度检索 — 聊天时调用
-     * 1. 用户 query → Ollama embedding
-     * 2. 向量 → Chroma 相似度搜索
-     * 3. 返回 Top-K 文段 + 来源
+     * 检索相关文段。用该文档关联的嵌入模型来生成 query 向量。
+     * 如果没有文档被向量化过（都没有 embeddingModelId），回退到查所有 ModelConfig
+     * 中第一个可用的来生成向量。
      */
     public List<Map<String, Object>> searchRelevant(String query, int topK) {
         if (query == null || query.isBlank()) return List.of();
-
         try {
-            float[] queryVec = embed(query);
+            // 找任意一个已向量化的文档，用它的 embedding model
+            ModelConfig embModel = findEmbeddingModel();
+            if (embModel == null) {
+                System.err.println("[RAG] 没有可用的嵌入模型配置，跳过检索");
+                return List.of();
+            }
+            float[] queryVec = embedWithModel(query, embModel);
             if (queryVec == null) return List.of();
-
-            List<Map<String, Object>> results = chromaQuery(queryVec, topK);
-            return results.stream()
-                    .filter(r -> r.get("content") != null)
-                    .collect(Collectors.toList());
+            return chromaQuery(queryVec, topK).stream()
+                    .filter(r -> r.get("content") != null).collect(Collectors.toList());
         } catch (Exception e) {
             System.err.println("[RAG] 检索失败: " + e.getMessage());
             return List.of();
         }
     }
 
-    // ===================== Ollama Embedding =====================
+    /** 查找嵌入模型：优先取已完成向量化的文档关联的模型，否则取第一个 ModelConfig */
+    private ModelConfig findEmbeddingModel() {
+        List<Rag> all = ragRepository.findAll();
+        for (Rag r : all) {
+            if (r.getEmbeddingModelId() != null && r.getStatus() != null
+                    && r.getStatus().equals("completed")) {
+                return modelConfigRepo.findById(r.getEmbeddingModelId()).orElse(null);
+            }
+        }
+        // 兜底：取第一个已配置 apiKey 的模型
+        List<ModelConfig> models = modelConfigRepo.findAll();
+        for (ModelConfig m : models) {
+            if (m.getApiKeyEncrypted() != null && !m.getApiKeyEncrypted().isBlank()) {
+                return m;
+            }
+        }
+        return null;
+    }
 
-    /** 调用 Ollama /api/embeddings → 返回 768 维向量 */
-    private float[] embed(String text) {
+    // ===================== 通用 Embedding（OpenAI 兼容 API） =====================
+
+    /**
+     * 用指定模型配置调用嵌入 API（OpenAI 兼容格式）。
+     * POST {baseUrl}/embeddings  body: { model, input }
+     */
+    private float[] embedWithModel(String text, ModelConfig mc) {
         try {
+            String url = mc.getBaseUrl();
+            if (url == null || url.isBlank()) url = "https://api.openai.com/v1";
+            if (!url.endsWith("/")) url += "/";
+            url += "embeddings";
+
             String body = mapper.writeValueAsString(Map.of(
-                    "model", EMBEDDING_MODEL,
-                    "prompt", text
+                    "model", mc.getModelName() != null ? mc.getModelName() : "text-embedding-ada-002",
+                    "input", text
             ));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(OLLAMA_URL + "/api/embeddings"))
+                    .uri(URI.create(url))
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + mc.getApiKeyEncrypted())
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(30))
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
                 JsonNode root = mapper.readTree(resp.body());
-                JsonNode arr = root.get("embedding");
+                // OpenAI 格式: { data: [{ embedding: [...] }] }
+                // Ollama 格式: { embedding: [...] }
+                JsonNode arr;
+                if (root.has("data")) {
+                    arr = root.get("data").get(0).get("embedding");
+                } else {
+                    arr = root.get("embedding");
+                }
                 if (arr != null && arr.isArray()) {
                     float[] vec = new float[arr.size()];
                     for (int i = 0; i < arr.size(); i++) vec[i] = arr.get(i).floatValue();
                     return vec;
                 }
             } else {
-                System.err.println("[Ollama] embedding 返回 HTTP " + resp.statusCode());
+                System.err.println("[Embed] HTTP " + resp.statusCode() + ": " + resp.body().substring(0, Math.min(200, resp.body().length())));
             }
         } catch (Exception e) {
-            System.err.println("[Ollama] embedding 失败: " + e.getMessage());
+            System.err.println("[Embed] 失败: " + e.getMessage());
         }
         return null;
     }
 
     // ===================== Chroma REST API =====================
 
-    /** 确保 Chroma 集合存在 */
     private void ensureChromaCollection() {
         try {
-            // 尝试获取集合
             HttpRequest get = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + COLLECTION_NAME))
-                    .GET().build();
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + COLLECTION_NAME)).GET().build();
             HttpResponse<String> resp = http.send(get, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
-                chromaReady = true;
                 System.out.println("[Chroma] 集合 " + COLLECTION_NAME + " 已存在");
                 return;
             }
         } catch (Exception ignored) {}
-
-        // 不存在则创建
         try {
             String body = mapper.writeValueAsString(Map.of(
-                    "name", COLLECTION_NAME,
-                    "metadata", Map.of("description", "MyLLM RAG collection")
-            ));
+                    "name", COLLECTION_NAME, "metadata", Map.of("description", "MyLLM RAG")));
             HttpRequest post = HttpRequest.newBuilder()
                     .uri(URI.create(CHROMA_URL + "/api/v2/collections"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(10))
-                    .build();
-            HttpResponse<String> resp = http.send(post, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200 || resp.statusCode() == 201) {
-                chromaReady = true;
-                System.out.println("[Chroma] 集合 " + COLLECTION_NAME + " 已创建");
-            }
+                    .timeout(Duration.ofSeconds(10)).build();
+            http.send(post, HttpResponse.BodyHandlers.ofString());
+            System.out.println("[Chroma] 集合 " + COLLECTION_NAME + " 已创建");
         } catch (Exception e) {
             System.err.println("[Chroma] 创建集合失败: " + e.getMessage());
         }
     }
 
-    /** Chroma upsert: 插入或更新一条向量记录 */
     private void chromaUpsert(String id, float[] vector, Map<String, Object> metadata) {
         try {
             Map<String, Object> record = new LinkedHashMap<>();
-            record.put("id", id);
-            record.put("vector", vector);
-            record.put("metadata", metadata);
-
+            record.put("id", id); record.put("vector", vector); record.put("metadata", metadata);
             String body = mapper.writeValueAsString(Map.of("documents", List.of(record)));
-
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/"
-                            + COLLECTION_NAME + "/documents"))
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + COLLECTION_NAME + "/documents"))
                     .header("Content-Type", "application/json")
                     .method("POST", HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(10))
-                    .build();
+                    .timeout(Duration.ofSeconds(10)).build();
             http.send(req, HttpResponse.BodyHandlers.ofString());
-        } catch (Exception e) {
-            // 单个切片失败不阻断其他切片
-        }
+        } catch (Exception ignored) {}
     }
 
-    /** Chroma 查询: 向量相似度搜索 */
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> chromaQuery(float[] vector, int topK) {
         try {
             String body = mapper.writeValueAsString(Map.of(
-                    "query_embeddings", List.of(vector),
-                    "n_results", topK,
-                    "include", List.of("metadatas", "documents", "distances")
-            ));
+                    "query_embeddings", List.of(vector), "n_results", topK,
+                    "include", List.of("metadatas", "documents", "distances")));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/"
-                            + COLLECTION_NAME + "/query"))
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + COLLECTION_NAME + "/query"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(15))
-                    .build();
+                    .timeout(Duration.ofSeconds(15)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-
             if (resp.statusCode() == 200) {
                 JsonNode root = mapper.readTree(resp.body());
-                JsonNode docs = root.get("documents");
-                JsonNode metas = root.get("metadatas");
-                JsonNode dists = root.get("distances");
-
+                JsonNode docs = root.get("documents"), metas = root.get("metadatas"), dists = root.get("distances");
                 List<Map<String, Object>> results = new ArrayList<>();
                 if (docs != null && docs.isArray() && !docs.isEmpty()) {
-                    JsonNode arr = docs.get(0); // 第一个 query 的结果
+                    JsonNode arr = docs.get(0);
                     for (int i = 0; i < arr.size(); i++) {
                         Map<String, Object> item = new LinkedHashMap<>();
                         item.put("content", arr.get(i).asText());
-                        double dist = (dists != null && dists.get(0).size() > i)
-                                ? dists.get(0).get(i).asDouble() : 0.0;
-                        // Chroma distance → 相似度转换 (cosine)
+                        double dist = (dists != null && dists.get(0).size() > i) ? dists.get(0).get(i).asDouble() : 0;
                         item.put("similarity", Math.max(0, 1.0 - dist / 2.0));
-                        if (metas != null && metas.get(0).size() > i) {
-                            JsonNode meta = metas.get(0).get(i);
-                            item.put("source", meta.has("source") ? meta.get("source").asText() : "unknown");
-                        }
+                        if (metas != null && metas.get(0).size() > i)
+                            item.put("source", metas.get(0).get(i).get("source").asText());
                         results.add(item);
                     }
                 }
                 return results;
             }
-        } catch (Exception e) {
-            System.err.println("[Chroma] 查询失败: " + e.getMessage());
-        }
+        } catch (Exception e) { System.err.println("[Chroma] 查询失败: " + e.getMessage()); }
         return List.of();
     }
 
-    /** Chroma 删除: 按 ID 删除向量 */
     private void chromaDelete(String id) {
         try {
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/"
-                            + COLLECTION_NAME + "/documents/" + id))
-                    .DELETE()
-                    .timeout(Duration.ofSeconds(5))
-                    .build();
-            http.send(req, HttpResponse.BodyHandlers.ofString());
+            http.send(HttpRequest.newBuilder()
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + COLLECTION_NAME + "/documents/" + id))
+                    .DELETE().timeout(Duration.ofSeconds(5)).build(),
+                    HttpResponse.BodyHandlers.ofString());
         } catch (Exception ignored) {}
     }
 
@@ -388,10 +382,7 @@ public class RagService {
 
     private String extractText(Path filePath) {
         try { return Files.readString(filePath, StandardCharsets.UTF_8); }
-        catch (Exception e) {
-            try { return new String(Files.readAllBytes(filePath), "GBK"); }
-            catch (Exception e2) { return "[无法读取]"; }
-        }
+        catch (Exception e) { try { return new String(Files.readAllBytes(filePath), "GBK"); } catch (Exception e2) { return "[无法读取]"; } }
     }
 
     public static List<String> chunkText(String text, int size, int overlap, String method) {
@@ -402,44 +393,22 @@ public class RagService {
             default          -> chunkByFixedSize(text, size, overlap);
         };
     }
-
     private static List<String> chunkByFixedSize(String text, int size, int overlap) {
-        List<String> chunks = new ArrayList<>();
-        int start = 0;
-        while (start < text.length()) {
-            int end = Math.min(start + size, text.length());
-            chunks.add(text.substring(start, end));
-            start += (size - overlap);
-            if (start >= text.length()) break;
-        }
-        return chunks;
+        List<String> c = new ArrayList<>(); int s = 0;
+        while (s < text.length()) { c.add(text.substring(s, Math.min(s + size, text.length()))); s += (size - overlap); if (s >= text.length()) break; }
+        return c;
     }
-
     private static List<String> chunkByParagraph(String text, int size) {
-        List<String> chunks = new ArrayList<>();
-        for (String p : text.split("\\n\\s*\\n")) {
-            String t = p.trim(); if (t.isEmpty()) continue;
-            if (t.length() <= size) chunks.add(t);
-            else chunks.addAll(chunkByFixedSize(t, size, 0));
-        }
-        return chunks;
+        List<String> c = new ArrayList<>();
+        for (String p : text.split("\\n\\s*\\n")) { String t = p.trim(); if (t.isEmpty()) continue; if (t.length() <= size) c.add(t); else c.addAll(chunkByFixedSize(t, size, 0)); }
+        return c;
     }
-
     private static List<String> chunkBySentence(String text, int size, int overlap) {
-        List<String> sentences = new ArrayList<>();
-        String[] parts = text.split("(?<=[。！？.!?])\\s*");
-        StringBuilder cur = new StringBuilder();
-        for (String s : parts) {
-            String t = s.trim(); if (t.isEmpty()) continue;
-            if (cur.length() + t.length() > size && cur.length() > 0) {
-                sentences.add(cur.toString().trim());
-                cur = overlap > 0 && cur.length() > overlap
-                        ? new StringBuilder(cur.substring(cur.length() - overlap))
-                        : new StringBuilder();
-            }
-            cur.append(t);
-        }
-        if (!cur.isEmpty()) sentences.add(cur.toString().trim());
-        return sentences.isEmpty() ? List.of(text) : sentences;
+        List<String> sents = new ArrayList<>(); StringBuilder cur = new StringBuilder();
+        for (String s : text.split("(?<=[。！？.!?])\\s*")) { String t = s.trim(); if (t.isEmpty()) continue;
+            if (cur.length() + t.length() > size && cur.length() > 0) { sents.add(cur.toString().trim()); cur = overlap > 0 && cur.length() > overlap ? new StringBuilder(cur.substring(cur.length() - overlap)) : new StringBuilder(); }
+            cur.append(t); }
+        if (!cur.isEmpty()) sents.add(cur.toString().trim());
+        return sents.isEmpty() ? List.of(text) : sents;
     }
 }
