@@ -40,17 +40,27 @@ const chunkMethod = ref<'fixed_size' | 'paragraph' | 'sentence'>('fixed_size')
 const useServer = () => isLoggedIn.value && !isOffline.value
 let localIdCounter = Date.now()
 
-// ===== 数据加载 =====
+// ===== 数据加载：localStorage 总是作为底，服务器数据叠加在上 =====
 const loadRagsData = async () => {
+  // 总是先从 localStorage 加载（保证刷新不丢数据）
+  const localData = loadRags()
   if (useServer()) {
-    try { const res = await getRags(); rags.value = res.data }
-    catch { rags.value = loadRags() }
+    try {
+      const res = await getRags()
+      // 以服务器数据为准，但同时保留仅存于本地的数据（未同步的）
+      const serverIds = new Set(res.data.map((r: Rag) => r.id))
+      const localOnly = localData.filter((r: Rag) => r.id != null && !serverIds.has(r.id))
+      rags.value = [...res.data, ...localOnly]
+    } catch {
+      rags.value = localData
+    }
   } else {
-    rags.value = loadRags()
+    rags.value = localData
   }
 }
 onMounted(loadRagsData)
-const persistRags = () => { if (!useServer()) saveRags(rags.value) }
+// 始终存 localStorage 作备份（服务器模式亦然，防止刷新丢数据）
+const persistRags = () => { saveRags(rags.value) }
 
 // ===== 文件选择/拖拽 =====
 const onFileChange = (e: Event) => {
@@ -80,10 +90,11 @@ const handleUpload = async () => {
         fd.append('chunkMethod', chunkMethod.value)
         await createRag(fd)
         await loadRagsData()
+        saveRags(rags.value)   // 备份到 localStorage 防刷新丢失
         success = true
       } catch (e) {
         console.warn('服务器上传失败，降级到本地存储:', e)
-        // 不弹 alert → 静默降级
+        alert('⚠️ 上传到服务器失败（可能是 Ollama/Chroma 未启动）\n文件已保存到浏览器本地存储，联网后会自动同步。')
       }
     }
     if (!success) {

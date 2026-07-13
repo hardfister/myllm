@@ -45,12 +45,18 @@ const currentConfig = ref({
 let localIdCounter = Date.now()
 const dragIndex = ref<number | null>(null)  // 当前拖拽的项在数组中的索引
 
-// ===== 数据加载 =====
+// ===== 数据加载：localStorage 底 + 服务器覆盖 =====
 const loadModelsData = async () => {
+  const localData = loadModels()
   if (useServer()) {
-    try { const r = await getModels(); models.value = r.data }
-    catch { models.value = loadModels() }
-  } else { models.value = loadModels() }
+    try {
+      const r = await getModels(); models.value = r.data
+      // 合并仅存于本地的数据（未同步的）
+      const serverIds = new Set(r.data.map((m: any) => m.id))
+      const localOnly = localData.filter((m: any) => m.id != null && !serverIds.has(m.id))
+      for (const m of localOnly) { if (!models.value.some((s: any) => s.id === m.id)) models.value.push(m) }
+    } catch { models.value = localData }
+  } else { models.value = localData }
   // 按 sortOrder 排序
   models.value.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
   // 初始化 meta
@@ -64,7 +70,7 @@ const loadModelsData = async () => {
   if (mc) saveMeta(frontendMeta.value)
 }
 onMounted(loadModelsData)
-const persistModels = () => { if (!useServer()) saveModels(models.value) }
+const persistModels = () => { saveModels(models.value) }
 
 // ===== 新建 =====
 const handleNewConfig = () => {
@@ -91,7 +97,7 @@ const handleEditConfig = (item: ModelConfig, event: Event) => {
 const handleToggle = async (item: ModelConfig, event: Event) => {
   event.stopPropagation()
   if (item.id == null) return
-  if (useServer()) { await toggleModel(item.id); await loadModelsData() }
+  if (useServer()) { await toggleModel(item.id); await loadModelsData(); saveModels(models.value) }
   else { const t = models.value.find(m => m.id === item.id); if (t) { t.isEnabled = t.isEnabled === 1 ? 0 : 1; persistModels() } }
 }
 
@@ -118,6 +124,7 @@ const saveFinalConfig = async (fd: { title: string; color: string; maxTokens: nu
       if (isEditing.value && currentConfig.value.id != null) { await updateModel(currentConfig.value.id, p) }
       else { const r = await createModel(p); if (r.data.id != null) currentConfig.value.id = r.data.id }
       await loadModelsData()
+      saveModels(models.value)  // 备份到 localStorage
     } else {
       if (isEditing.value && currentConfig.value.id != null) {
         const i = models.value.findIndex(m => m.id === currentConfig.value.id)
@@ -139,7 +146,7 @@ const handleDeleteConfig = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除？')) return
   try {
-    if (useServer()) { await deleteModel(id); await loadModelsData() }
+    if (useServer()) { await deleteModel(id); await loadModelsData(); saveModels(models.value) }
     else { models.value = models.value.filter(m => m.id !== id); persistModels() }
     delete frontendMeta.value[id]; saveMeta(frontendMeta.value)
   } catch (e) { console.error('删除失败:', e) }

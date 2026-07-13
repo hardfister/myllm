@@ -41,24 +41,27 @@ const defaultConfig = (): MemoryConfig => ({
 })
 const form = ref<MemoryConfig & { id?: number }>(defaultConfig())
 
-// ===== 数据加载 =====
+// ===== 数据加载：localStorage 底 + 服务器覆盖 =====
 const loadMemoriesData = async () => {
+  const localData = loadMemories()
   if (useServer()) {
-    try { const res = await getMemories(); memories.value = res.data }
-    catch { memories.value = loadMemories() }
-  } else {
-    memories.value = loadMemories()
-  }
+    try {
+      const res = await getMemories(); memories.value = res.data
+      const serverIds = new Set(res.data.map((m: any) => m.id))
+      const localOnly = localData.filter((m: any) => m.id != null && !serverIds.has(m.id))
+      for (const m of localOnly) { if (!memories.value.some((s: any) => s.id === m.id)) memories.value.push(m) }
+    } catch { memories.value = localData }
+  } else { memories.value = localData }
 }
 onMounted(loadMemoriesData)
-const persistMemories = () => { if (!useServer()) saveMemories(memories.value) }
+const persistMemories = () => { saveMemories(memories.value) }
 
 // ===== 多选切换：翻转单个配置（记忆配置可多选） =====
 const handleToggle = async (record: MemoryConfig, event: Event) => {
   event.stopPropagation()
   if (record.id == null) return
   if (useServer()) {
-    try { await toggleMemory(record.id); await loadMemoriesData() }
+    try { await toggleMemory(record.id); await loadMemoriesData(); saveMemories(memories.value) }
     catch (e) { console.error('切换失败:', e) }
   } else {
     const t = memories.value.find(m => m.id === record.id)
@@ -81,6 +84,7 @@ const handleSave = async () => {
       if (isEditing.value && id != null) { await updateMemory(id, data) }
       else { await createMemory(data) }
       await loadMemoriesData()
+      saveMemories(memories.value)
     } else {
       if (isEditing.value && id != null) {
         const idx = memories.value.findIndex(m => m.id === id)
@@ -100,7 +104,7 @@ const handleDelete = async (id: number, event: Event) => {
   event.stopPropagation()
   if (!confirm('确认删除？')) return
   try {
-    if (useServer()) { await deleteMemory(id); await loadMemoriesData() }
+    if (useServer()) { await deleteMemory(id); await loadMemoriesData(); saveMemories(memories.value) }
     else { memories.value = memories.value.filter(m => m.id !== id); persistMemories() }
   } catch (e) { console.error('删除失败:', e) }
 }
