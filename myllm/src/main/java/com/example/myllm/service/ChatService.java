@@ -133,14 +133,15 @@ public class ChatService {
         // 6. 保存用户消息到历史
         history.add(Map.of("role", "user", "content", userMessage));
 
-        // 7. 依次调用每个启用的模型，每个模型看到之前所有的对话
+        // 7. 依次调用每个启用的模型
         List<Map<String, String>> replies = new ArrayList<>();
-        // 对话记录：用户消息作为起点，后续每个模型的回复依次追加
         StringBuilder conversationLog = new StringBuilder();
-        if (historyText.length() > 0) {
+        if (!historyText.isEmpty()) {
+            conversationLog.append("【以下为之前对话记录，仅供上下文参考，不要复述，只回答当前问题】\n");
             conversationLog.append(historyText);
+            conversationLog.append("【之前对话记录结束】\n\n");
         }
-        conversationLog.append("user: ").append(userMessage).append("\n");
+        conversationLog.append("【当前问题】\nuser: ").append(userMessage).append("\n");
 
         for (ModelConfig mc : enabledModels) {
             String displayName = mc.getDisplayName() != null && !mc.getDisplayName().isBlank()
@@ -361,9 +362,14 @@ public class ChatService {
 
         history.add(Map.of("role", "user", "content", userMessage));
 
-        // 对话记录
-        StringBuilder conversationLog = new StringBuilder(historyText);
-        conversationLog.append("user: ").append(userMessage).append("\n");
+        // 对话记录：历史仅作上下文参考，分隔后只保留当前用户问题
+        StringBuilder conversationLog = new StringBuilder();
+        if (!historyText.isEmpty()) {
+            conversationLog.append("【以下为之前对话记录，仅供你作为上下文参考，不要复述也不要逐一回复，只回答下方当前问题】\n");
+            conversationLog.append(historyText);
+            conversationLog.append("【之前对话记录结束】\n\n");
+        }
+        conversationLog.append("【当前问题】\nuser: ").append(userMessage).append("\n");
 
         // 依次流式调用每个模型
         final String finalSessionId = sessionId;
@@ -665,7 +671,8 @@ public class ChatService {
             sb.append("你就是「").append(displayName).append("」，只代表你自己一个人。\n");
             sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话。\n");
             sb.append("仅允许：以").append(displayName).append("的角度回复你自己的观点。\n");
-            sb.append("请先阅读全部对话记录（包括其他模型已说的话），然后给出独立判断回复。");
+            sb.append("请先阅读全部对话记录（包括其他模型已说的话），然后给出独立判断回复。\n");
+            sb.append("重要：只回应当前用户的问题，不要复述、总结或逐条回应之前对话记录中的旧内容。");
         }
 
         return sb.toString();
