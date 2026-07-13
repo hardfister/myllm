@@ -2,6 +2,8 @@ package com.example.myllm.service;
 
 import com.example.myllm.model.entity.ModelConfig;
 import com.example.myllm.repository.ModelConfigRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,15 +19,20 @@ public class ModelConfigService {
         this.modelConfigRepository = modelConfigRepository;
     }
 
+    /** 读缓存: Redis key = "model_list::SimpleKey []" */
+    @Cacheable(value = "model_list", unless = "#result.isEmpty()")
     public List<ModelConfig> getAllModels() {
         return modelConfigRepository.findAllByOrderByUpdatedAtDesc();
     }
 
+    /** 写操作 → 清除缓存，下次读时重新加载 */
+    @CacheEvict(value = "model_list", allEntries = true)
     @Transactional
     public ModelConfig createModel(ModelConfig model) {
         return modelConfigRepository.save(model);
     }
 
+    @CacheEvict(value = "model_list", allEntries = true)
     @Transactional
     public ModelConfig updateModel(Long id, ModelConfig updated) {
         ModelConfig existing = modelConfigRepository.findById(id)
@@ -44,12 +51,13 @@ public class ModelConfigService {
         return modelConfigRepository.save(existing);
     }
 
+    @CacheEvict(value = "model_list", allEntries = true)
     @Transactional
     public void deleteModel(Long id) {
         modelConfigRepository.deleteById(id);
     }
 
-    /** 多选切换 — 不排他，只翻转当前项 */
+    @CacheEvict(value = "model_list", allEntries = true)
     @Transactional
     public ModelConfig toggleModel(Long id) {
         ModelConfig t = modelConfigRepository.findById(id)
@@ -58,7 +66,7 @@ public class ModelConfigService {
         return modelConfigRepository.save(t);
     }
 
-    /** 批量更新排序 — 拖拽后前端把整组 id→sortOrder 映射发过来 */
+    @CacheEvict(value = "model_list", allEntries = true)
     @Transactional
     public void reorder(List<Map<String, Object>> items) {
         for (Map<String, Object> item : items) {

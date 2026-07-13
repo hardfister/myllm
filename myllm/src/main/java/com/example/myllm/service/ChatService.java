@@ -4,6 +4,8 @@ import com.example.myllm.model.dto.ChatResponse;
 import com.example.myllm.model.entity.*;
 import com.example.myllm.repository.*;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -233,7 +235,8 @@ public class ChatService {
 
     // ==================== 历史记录 API ====================
 
-    /** 获取所有会话列表 */
+    /** 获取所有会话列表 — 缓存 30s，写操作自动失效 */
+    @Cacheable(value = "history_sessions", unless = "#result.isEmpty()")
     public List<Map<String, Object>> listSessions() {
         List<Session> all = sessionRepo.findAllByOrderByUpdatedAtDesc();
         List<Map<String, Object>> result = new ArrayList<>();
@@ -251,8 +254,9 @@ public class ChatService {
     }
 
     /**
-     * 获取某会话的完整消息列表 — 用于前端点击历史会话后加载对话记录
+     * 获取某会话的完整消息列表 — 缓存 30min
      */
+    @Cacheable(value = "session_msgs", key = "#sessionId", unless = "#result.isEmpty()")
     public List<Map<String, Object>> getSessionMessages(String sessionId) {
         Session s = sessionRepo.findBySessionName(sessionId);
         if (s == null) return List.of();
@@ -277,7 +281,8 @@ public class ChatService {
         return result;
     }
 
-    /** 删除会话及其全部消息 */
+    /** 删除会话及其全部消息 — 同时清除相关缓存 */
+    @CacheEvict(value = {"history_sessions", "session_msgs"}, allEntries = true)
     @Transactional
     public void deleteSession(Long dbSessionId) {
         messageRepo.deleteBySessionId(dbSessionId);

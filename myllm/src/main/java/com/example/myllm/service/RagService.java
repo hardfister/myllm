@@ -4,6 +4,8 @@ import com.example.myllm.model.entity.Rag;
 import com.example.myllm.repository.RagRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -57,6 +59,7 @@ public class RagService {
 
     // ===================== CRUD =====================
 
+    @Cacheable(value = "rag_list", unless = "#result.isEmpty()")
     public List<Rag> getAllRags() {
         return ragRepository.findAllByOrderByCreatedAtDesc();
     }
@@ -64,6 +67,7 @@ public class RagService {
     /**
      * 上传文档 → 提取文本 → 切片 → Ollama embedding → Chroma 存储
      */
+    @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public Rag createRag(MultipartFile file, String collectionName,
                           Integer chunkSize, Integer chunkOverlap, String chunkMethod) throws IOException {
@@ -125,6 +129,7 @@ public class RagService {
     }
 
     /** 更新文档元数据 + 切片配置（变更时重新向量化） */
+    @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
     public Rag updateRag(Long id, Rag updated) {
         Rag ex = ragRepository.findById(id)
@@ -163,6 +168,7 @@ public class RagService {
         return ragRepository.save(ex);
     }
 
+    @CacheEvict(value = "rag_list", allEntries = true)
     @Transactional
     public Rag toggleRag(Long id) {
         Rag t = ragRepository.findById(id)

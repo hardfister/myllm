@@ -35,6 +35,24 @@ spring:
           port: 8000
         collection-name: my_knowledge_base
 
+  # Redis 缓存
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 300000        # 默认 5 分钟 (ms)
+      cache-null-values: false    # 不缓存 null，避免缓存穿透
+
 # JWT
 app:
   jwt:

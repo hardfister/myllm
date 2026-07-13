@@ -2,6 +2,8 @@ package com.example.myllm.service;
 
 import com.example.myllm.model.entity.MemoryConfig;
 import com.example.myllm.repository.MemoryConfigRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,15 +18,18 @@ public class MemoryConfigService {
         this.memoryConfigRepository = memoryConfigRepository;
     }
 
+    @Cacheable(value = "memory_list", unless = "#result.isEmpty()")
     public List<MemoryConfig> getAllMemories() {
         return memoryConfigRepository.findAllByOrderByUpdatedAtDesc();
     }
 
+    @CacheEvict(value = "memory_list", allEntries = true)
     @Transactional
     public MemoryConfig createMemory(MemoryConfig config) {
         return memoryConfigRepository.save(config);
     }
 
+    @CacheEvict(value = "memory_list", allEntries = true)
     @Transactional
     public MemoryConfig updateMemory(Long id, MemoryConfig updated) {
         MemoryConfig existing = memoryConfigRepository.findById(id)
@@ -46,6 +51,7 @@ public class MemoryConfigService {
         return memoryConfigRepository.save(existing);
     }
 
+    @CacheEvict(value = "memory_list", allEntries = true)
     @Transactional
     public MemoryConfig toggleMemory(Long id) {
         MemoryConfig target = memoryConfigRepository.findById(id)
@@ -54,6 +60,7 @@ public class MemoryConfigService {
         return memoryConfigRepository.save(target);
     }
 
+    @CacheEvict(value = "memory_list", allEntries = true)
     @Transactional
     public void deleteMemory(Long id) {
         memoryConfigRepository.deleteById(id);
