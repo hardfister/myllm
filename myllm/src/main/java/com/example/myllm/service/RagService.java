@@ -65,7 +65,8 @@ public class RagService {
     }
 
     /**
-     * 上传文档 → 提取文本 → 切片 → Ollama embedding → Chroma 存储
+     * 上传文档 → 提取文本 → 切片 → 保存 MySQL（立即返回）。
+     * Ollama embedding + Chroma 存储放在异步线程，失败不影响上传。
      */
     @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
@@ -89,9 +90,9 @@ public class RagService {
 
         String collName = (collectionName != null && !collectionName.isBlank())
                 ? collectionName : COLLECTION_NAME;
-        String docId = stored; // 用存储文件名作唯一 ID
+        String docId = stored;
 
-        // 3. 保存 MySQL 记录
+        // 3. MySQL 立即保存（无论后续向量化是否成功，记录不丢）
         Rag rag = new Rag();
         rag.setFilename(originalFilename != null ? originalFilename : "unknown");
         rag.setFilePath(target.toAbsolutePath().toString());
@@ -101,30 +102,39 @@ public class RagService {
         rag.setChunkSize(cs); rag.setChunkOverlap(co); rag.setChunkMethod(cm);
         rag.setChunkCount(chunks.size());
         rag.setContent(String.join("\n---CHUNK---\n", chunks));
-        rag.setStatus("embedding");
+        rag.setStatus("pending");  // 等待向量化
         rag = ragRepository.save(rag);
 
-        // 4. 逐个切片: Ollama embedding → Chroma upsert
-        try {
-            for (int i = 0; i < chunks.size(); i++) {
-                float[] vector = embed(chunks.get(i));
-                if (vector != null) {
-                    Map<String, Object> meta = Map.of(
-                            "source", rag.getFilename(),
-                            "chunk_index", i,
-                            "rag_id", rag.getId(),
-                            "text", chunks.get(i)
-                    );
-                    chromaUpsert(docId + "_chunk_" + i, vector, meta);
+        // 4. 异步向量化 — 失败不阻断上传
+        final Long ragId = rag.getId();
+        final String ragFilename = rag.getFilename();
+        final String ragDocId = docId;
+        new Thread(() -> {
+            try {
+                ragRepository.findById(ragId).ifPresent(r -> {
+                    r.setStatus("embedding"); ragRepository.save(r);
+                });
+                for (int i = 0; i < chunks.size(); i++) {
+                    float[] vector = embed(chunks.get(i));
+                    if (vector != null) {
+                        chromaUpsert(ragDocId + "_chunk_" + i, vector, Map.of(
+                                "source", ragFilename, "chunk_index", i,
+                                "rag_id", ragId, "text", chunks.get(i)));
+                    }
                 }
+                ragRepository.findById(ragId).ifPresent(r -> {
+                    r.setStatus("completed"); ragRepository.save(r);
+                });
+                System.out.println("[RAG] ✅ 文档 " + ragDocId + " 向量化完成: " + chunks.size() + " 个切片");
+            } catch (Exception e) {
+                ragRepository.findById(ragId).ifPresent(r -> {
+                    r.setStatus("failed"); ragRepository.save(r);
+                });
+                System.err.println("[RAG] ❌ 向量化失败(文件已保存): " + e.getMessage());
             }
-            rag.setStatus("completed");
-            System.out.println("[RAG] 文档 " + docId + " 完成: " + chunks.size() + " 个切片 → Chroma");
-        } catch (Exception e) {
-            rag.setStatus("failed");
-            System.err.println("[RAG] Chroma 写入失败: " + e.getMessage());
-        }
-        ragRepository.save(rag);
+        }, "rag-embed-" + ragId).start();
+
+        System.out.println("[RAG] 📄 文档已接收: " + ragFilename + " (" + chunks.size() + " 切片, 待向量化)");
         return rag;
     }
 
