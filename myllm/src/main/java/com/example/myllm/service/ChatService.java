@@ -395,17 +395,26 @@ public class ChatService {
             onEvent.accept("end_model", displayName);
         }
 
+        // 只收集本轮新增的 AI 回复（不包含历史，避免ai_response逐轮膨胀）
+        int historySizeBefore = ctxMsgs.size() + 1; // ctxMsgs + userMessage
+        List<Map<String, String>> newAiReplies = new ArrayList<>();
+        for (int i = historySizeBefore; i < history.size(); i++) {
+            Map<String, String> msg = history.get(i);
+            if (!"user".equals(msg.get("role"))) {
+                newAiReplies.add(msg);
+            }
+        }
+
         onEvent.accept("done", finalSessionId);
-        saveChatAsync(userMessage, sessionId, !dbSessionExists, history, activeMemory, enabledRags, enabledModels.get(0));
+        saveChatAsync(userMessage, sessionId, !dbSessionExists, newAiReplies, activeMemory, enabledRags, enabledModels.get(0));
     }
 
-    /** 异步持久化（与 chat 共享） */
+    /** 异步持久化 — combinedAi 仅含本轮回复，不包含历史 */
     private void saveChatAsync(String userMessage, String sessionId, boolean isNew,
-                                List<Map<String, String>> history, MemoryConfig mem,
+                                List<Map<String, String>> newAiReplies, MemoryConfig mem,
                                 List<Rag> rags, ModelConfig mc) {
-        List<Map<String, String>> aiMsgs = history.stream()
-                .filter(m -> !"user".equals(m.get("role"))).collect(Collectors.toList());
-        String combinedAi = aiMsgs.stream()
+        if (newAiReplies.isEmpty()) return;
+        String combinedAi = newAiReplies.stream()
                 .map(m -> "[" + m.get("role") + "] " + m.get("content"))
                 .collect(Collectors.joining("\n\n"));
         Rag firstRag = rags.isEmpty() ? null : rags.get(0);
@@ -669,7 +678,7 @@ public class ChatService {
             sb.append("发言次序：用户提问 → ")
               .append(String.join(" → ", ordered)).append("。\n");
             sb.append("你就是「").append(displayName).append("」，只代表你自己一个人。\n");
-            sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话。\n");
+            sb.append("不允许：模拟/替其他角色说话、替用户说话、替其他模型说话；以“（模型名称）：（对话）”回复用户\n");
             sb.append("仅允许：以").append(displayName).append("的角度回复你自己的观点。\n");
             sb.append("⚠️ 回答规则（极其重要！违反将导致对话混乱）：\n");
             sb.append("1. 只回应用户的【当前问题】，不要回应或复述对话框中之前的任何内容。\n");
