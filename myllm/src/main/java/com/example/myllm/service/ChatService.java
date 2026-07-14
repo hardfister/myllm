@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.net.ConnectException;
 import java.time.Duration;
 import java.util.*;
+import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -512,6 +513,64 @@ public class ChatService {
     public void deleteSession(Long dbSessionId) {
         messageRepo.deleteBySessionId(dbSessionId);
         sessionRepo.deleteById(dbSessionId);
+    }
+
+    /** 手动重命名会话 */
+    public void renameSession(String sessionId, String newTitle) {
+        if (newTitle == null || newTitle.isBlank()) return;
+        Session s = sessionRepo.findBySessionName(sessionId);
+        if (s != null) {
+            s.setTitle(newTitle);
+            sessionRepo.save(s);
+        }
+    }
+
+    /** AI 自动起名 — 取完整对话，调第一个启用的模型生成 ≤20 字标题 */
+    public String generateAiTitle(String sessionId) {
+        Session s = sessionRepo.findBySessionName(sessionId);
+        if (s == null) return "新对话";
+
+        List<Message> msgs = messageRepo.findBySessionIdOrderByCreatedAt(s.getId());
+        if (msgs.isEmpty()) return "新对话";
+
+        // 找第一个启用的模型
+        ModelConfig mc = modelConfigRepo.findAll().stream()
+                .filter(m -> m.getIsEnabled() != null && m.getIsEnabled() == 1)
+                .sorted(Comparator.comparingInt(m -> m.getSortOrder() != null ? m.getSortOrder() : 0))
+                .findFirst().orElse(null);
+        if (mc == null) return s.getTitle() != null ? s.getTitle() : "新对话";
+
+        // 拼对话内容（截取前 2000 字防 token 超限）
+        StringBuilder dialog = new StringBuilder();
+        for (Message m : msgs) {
+            dialog.append("用户: ").append(m.getUserMessage()).append("\n");
+            if (m.getAiResponse() != null) dialog.append("回复: ").append(m.getAiResponse()).append("\n");
+        }
+        String content = dialog.toString();
+        if (content.length() > 2000) content = content.substring(0, 2000);
+
+        try {
+            String baseUrl = mc.getBaseUrl() != null && !mc.getBaseUrl().isBlank()
+                    ? mc.getBaseUrl() : "https://api.deepseek.com/v1";
+            OpenAiChatModel model = OpenAiChatModel.builder()
+                    .baseUrl(baseUrl).apiKey(mc.getApiKeyEncrypted())
+                    .modelName(mc.getModelName() != null ? mc.getModelName() : "deepseek-chat")
+                    .temperature(0.3).maxTokens(50).timeout(Duration.ofSeconds(30)).build();
+
+            String prompt = "请用不超过20个字简短总结以下对话的主题，只输出标题本身，不要引号，不要解释：\n\n" + content;
+            String title = model.generate(prompt);
+            if (title != null) {
+                title = title.trim().replaceAll("^[\"'「]|[\"'」]$", "");
+                if (title.length() > 30) title = title.substring(0, 30);
+                s.setTitle(title);
+                sessionRepo.save(s);
+                System.out.println("[AI标题] " + sessionId + " → " + title);
+                return title;
+            }
+        } catch (Exception e) {
+            System.err.println("[AI标题] 失败: " + e.getMessage());
+        }
+        return s.getTitle() != null ? s.getTitle() : "新对话";
     }
 
     // ==================== 私有方法 ====================

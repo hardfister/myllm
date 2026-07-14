@@ -345,5 +345,11 @@ export function getSessionMessages(sessionId: string): Promise<{ data: SessionMe
 export function deleteSession(dbId: number): Promise<{ data: { message: string } }> {
   return api.delete(`/api/sessions/${dbId}`)
 }
+export function renameSession(sessionId: string, title: string): Promise<{ data: { message: string } }> {
+  return api.put(`/api/sessions/${sessionId}/rename`, { title })
+}
+export function generateAiTitle(sessionId: string): Promise<{ data: { title: string } }> {
+  return api.post(`/api/sessions/${sessionId}/ai-title`)
+}
 
 export default api

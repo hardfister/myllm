@@ -86,6 +86,21 @@ public class ChatController {
         return "会话已清除";
     }
 
+    /** 手动重命名会话 */
+    @PutMapping("/api/sessions/{sessionId}/rename")
+    public Map<String, String> renameSession(@PathVariable String sessionId, @RequestBody Map<String, String> body) {
+        String newTitle = body.get("title");
+        chatService.renameSession(sessionId, newTitle);
+        return Map.of("message", "ok");
+    }
+
+    /** AI 自动起名 — 把完整对话发给第一个启用的模型，返回 ≤20 字标题 */
+    @PostMapping("/api/sessions/{sessionId}/ai-title")
+    public Map<String, String> aiTitle(@PathVariable String sessionId) {
+        String title = chatService.generateAiTitle(sessionId);
+        return Map.of("title", title);
+    }
+
     // ===== 历史记录接口 =====
 
     /** 获取全部历史会话（按最近活跃排序） */

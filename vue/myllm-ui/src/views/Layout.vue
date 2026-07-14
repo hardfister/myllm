@@ -16,7 +16,7 @@ import RagList from './RagList.vue'
 import ModelList from './ModelList.vue'
 import MemList from './MemList.vue'
 import LoginModal from './LoginModal.vue'
-import { sendChatMessage, sendChatMessageStream, newSession, clearSession, listSessions, deleteSession, getSessionMessages } from '../api'
+import { sendChatMessage, sendChatMessageStream, newSession, clearSession, listSessions, deleteSession, renameSession, generateAiTitle, getSessionMessages } from '../api'
 import type { ChatResponse, ChatMessage, HistorySession, SessionMessage } from '../api'
 import { useAuth, checkAuth, logout } from '../services/auth'
 import {
@@ -168,11 +168,32 @@ const sendMessage = () => {
   )
 }
 
-// ===== 删除历史会话（二次确认） =====
+// ===== 历史会话操作 =====
+const renameText = ref('')
+
+const doRename = async (item: HistorySession) => {
+  const newTitle = renameText.value.trim()
+  if (!newTitle) return
+  try {
+    await renameSession(item.sessionId, newTitle)
+    item.title = newTitle
+    renameText.value = ''
+    openMenuId.value = null
+  } catch (e) { console.error('改名失败:', e) }
+}
+
+const doAiTitle = async (item: HistorySession) => {
+  try {
+    const res = await generateAiTitle(item.sessionId)
+    item.title = res.data.title
+    renameText.value = ''
+    openMenuId.value = null
+  } catch (e) { console.error('AI起名失败:', e); alert('AI起名失败') }
+}
+
 const confirmDeleteSession = (item: HistorySession) => {
-  openMenuId.value = null  // 关闭 ⋯ 菜单
-  // 二次确认
   if (!confirm(`确定要删除会话「${item.title}」吗？\n\n此操作不可撤销，将同时删除该会话下的全部消息。`)) return
+  openMenuId.value = null
   handleDeleteSession(item.id)
 }
 
@@ -330,7 +351,12 @@ const handleClearAll = () => {
               <div class="history-menu-wrapper" @click.stop>
                 <button class="history-menu-btn" @click.stop="toggleMenu(item.id, $event)" title="更多操作">⋯</button>
                 <div v-if="openMenuId === item.id" class="history-popup">
-                  <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
+                  <input v-model="renameText" class="popup-input" placeholder="新名称..." @keyup.enter="doRename(item)" />
+                  <div class="popup-btns">
+                    <button class="popup-item" @click.stop="doRename(item)">✏️ 改名</button>
+                    <button class="popup-item" @click.stop="doAiTitle(item)">🤖 AI起名</button>
+                    <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -552,15 +578,21 @@ const handleClearAll = () => {
   box-shadow: 0 4px 20px rgba(0,0,0,0.12);
   border: 1px solid rgba(0,0,0,0.06); z-index: 300;
   white-space: nowrap; overflow: hidden; animation: popIn 0.12s ease;
+  padding: 8px; display: flex; flex-direction: column; gap: 6px;
 }
 @keyframes popIn { from { opacity: 0; transform: translateY(-50%) scale(0.92); } to { opacity: 1; transform: translateY(-50%) scale(1); } }
-.popup-item {
-  display: block; width: 100%; padding: 10px 18px; border: none; background: transparent;
-  font-size: 13px; cursor: pointer; text-align: left; color: #475569;
+.popup-input {
+  width: 160px; padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.6); font-size: 12px; outline: none;
 }
-.popup-item:hover { background: rgba(0,0,0,0.04); }
+.popup-btns { display: flex; gap: 4px; }
+.popup-item {
+  padding: 5px 8px; border: none; background: rgba(0,0,0,0.04); border-radius: 6px;
+  font-size: 11px; cursor: pointer; color: #475569; white-space: nowrap;
+}
+.popup-item:hover { background: rgba(0,0,0,0.08); }
 .popup-item.danger { color: #dc2626; }
-.popup-item.danger:hover { background: rgba(220,38,38,0.06); }
+.popup-item.danger:hover { background: rgba(220,38,38,0.1); }
 
 .history-empty { padding: 12px 20px; text-align: center; }
 
