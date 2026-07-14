@@ -30,9 +30,9 @@ const currentConfig = ref({
 const loadModelsData = async () => {
   if (useServer()) {
     try { const r = await getModels(); models.value = r.data }
-    catch { models.value = [] }      // 已登录: 只用服务器数据
+    catch { /* 保留已有数据，不清空 */ console.error('加载模型列表失败') }
   } else {
-    models.value = loadModels()    // 未登录: 只用本地
+    models.value = loadModels()
   }
   models.value.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
   let mc = false

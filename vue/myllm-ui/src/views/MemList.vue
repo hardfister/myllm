@@ -13,7 +13,7 @@ const defaultConfig = (): MemoryConfig => ({ strategyType: 'sliding_window', win
 const form = ref<MemoryConfig & { id?: number }>(defaultConfig())
 
 const loadMemoriesData = async () => {
-  if (useServer()) { try { const res = await getMemories(); memories.value = res.data } catch { memories.value = [] } }
+  if (useServer()) { try { const res = await getMemories(); memories.value = res.data } catch { console.error('加载记忆配置失败') } }
   else { memories.value = loadMemories() }
 }
 onMounted(loadMemoriesData)

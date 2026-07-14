@@ -49,7 +49,7 @@ let localIdCounter = Date.now()
 const loadRagsData = async () => {
   if (useServer()) {
     try { const res = await getRags(); rags.value = res.data }
-    catch { rags.value = [] }
+    catch { console.error('加载知识库列表失败') }
   } else { rags.value = loadRags() }
 }
 const loadEmbeddingModels = async () => {
