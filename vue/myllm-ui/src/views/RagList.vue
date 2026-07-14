@@ -12,7 +12,7 @@
  *   4. 向量化完成 → status=completed → 聊天时自动 RAG 检索
  */
 import { ref, onMounted } from 'vue'
-import { getRags, createRag, deleteRag, updateRag, toggleRag, embedRag, listVectors } from '../api'
+import { getRags, createRag, deleteRag, updateRag, toggleRag, embedRag, listVectors, clearVectors } from '../api'
 import { getModels } from '../api'
 import { saveRags, loadRags } from '../services/localStorage'
 import { useAuth } from '../services/auth'
@@ -54,6 +54,18 @@ const loadVectors = async () => {
   try { const r = await listVectors(user.value?.userId); vectors.value = r.data }
   catch { vectors.value = [] }
   finally { vectorsLoading.value = false; showVectors.value = true }
+}
+
+const doClearVectors = async () => {
+  if (!confirm('确定要删除 Chroma 中所有向量数据吗？此操作不可撤销。')) return
+  vectorsLoading.value = true
+  try {
+    const r = await clearVectors()
+    alert(r.data.message)
+    await loadVectors()
+  } catch (e) {
+    alert('清理失败: ' + (e as any).message)
+  } finally { vectorsLoading.value = false }
 }
 
 const useServer = () => isLoggedIn.value && !isOffline.value
@@ -282,9 +294,9 @@ emit('updateColor', '#0d9488')
 
         <!-- ===== Chroma 向量数据面板 ===== -->
         <div class="vectors-section">
-          <div class="vectors-section-header" @click="showVectors ? (showVectors = false) : loadVectors()">
-            <h4>🧬 Chroma 向量数据</h4>
-            <span class="toggle-icon">{{ showVectors ? '▲' : '▼' }}</span>
+          <div class="vectors-section-header">
+            <h4 @click="showVectors ? (showVectors = false) : loadVectors()" style="cursor:pointer;flex:1">🧬 Chroma 向量数据 <span class="toggle-icon">{{ showVectors ? '▲' : '▼' }}</span></h4>
+            <button class="clear-vectors-btn" @click.stop="doClearVectors" title="清空所有向量">🗑 全部清空</button>
           </div>
           <div v-if="showVectors" class="vectors-list">
             <div v-if="vectorsLoading" style="text-align:center;color:#94a3b8;padding:20px;">加载中...</div>
@@ -388,8 +400,11 @@ emit('updateColor', '#0d9488')
 .selected-hint { margin-top: 8px; font-size: 12px; color: #7c3aed; font-weight: 600; }
 .vectors-section { margin-top: 8px; padding: 12px; background: rgba(255,255,255,0.3); border-radius: 12px; border: 1px solid rgba(0,0,0,0.05); cursor: pointer; }
 .vectors-section-header { display: flex; justify-content: space-between; align-items: center; }
+.vectors-section-header { display: flex; justify-content: space-between; align-items: center; }
 .vectors-section-header h4 { margin: 0; font-size: 13px; color: #475569; }
 .toggle-icon { font-size: 12px; color: #94a3b8; }
+.clear-vectors-btn { padding: 3px 10px; font-size: 11px; background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.15); border-radius: 6px; cursor: pointer; color: #dc2626; white-space: nowrap; }
+.clear-vectors-btn:hover { background: rgba(220,38,38,0.15); }
 .vectors-list { margin-top: 10px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .vectors-list::-webkit-scrollbar { width: 3px; }
 .vectors-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }

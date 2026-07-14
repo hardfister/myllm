@@ -81,4 +81,11 @@ public class RagController {
     public List<Map<String, Object>> listVectors(@RequestParam(value = "userId", required = false) Long userId) {
         return ragService.listVectors(userId);
     }
+
+    /** 一键清理 Chroma 中所有向量 */
+    @DeleteMapping("/vectors")
+    public Map<String, Object> clearVectors() {
+        int count = ragService.clearAllVectors();
+        return Map.of("deleted", count, "message", "已删除 " + count + " 条向量");
+    }
 }

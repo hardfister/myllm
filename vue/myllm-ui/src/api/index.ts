@@ -266,6 +266,9 @@ export function embedRag(id: number, modelId: number): Promise<{ data: Rag }> {
 export function listVectors(userId?: number): Promise<{ data: any[] }> {
   return api.get('/api/rags/vectors', { params: userId ? { userId } : {} })
 }
+export function clearVectors(): Promise<{ data: { deleted: number; message: string } }> {
+  return api.delete('/api/rags/vectors')
+}
 
 // ==================== 聊天 ====================
 

@@ -344,9 +344,45 @@ public class RagService {
         ragRepository.deleteById(id);
     }
 
-    // ===================== 向量数据查询 =====================
+    // ===================== 向量数据管理 =====================
 
-    /** 获取当前用户 Chroma 集合中所有向量（分页） */
+    /** 一键清理 Chroma 集合中所有向量 */
+    public int clearAllVectors() {
+        try {
+            String uuid = getCollectionId(DEFAULT_COLLECTION);
+            // 先列出所有向量 ID
+            HttpResponse<String> listResp = http.send(HttpRequest.newBuilder()
+                    .uri(URI.create(chromaPath("/collections/" + uuid + "/get")))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                        mapper.writeValueAsString(Map.of("include", List.of("metadatas")))))
+                    .timeout(Duration.ofSeconds(10)).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (listResp.statusCode() == 200) {
+                JsonNode root = mapper.readTree(listResp.body());
+                JsonNode ids = root.get("ids");
+                if (ids != null && ids.isArray() && ids.size() > 0) {
+                    List<String> idList = new ArrayList<>();
+                    for (int i = 0; i < ids.size(); i++) idList.add(ids.get(i).asText());
+                    // 批量删除
+                    String delBody = mapper.writeValueAsString(Map.of("ids", idList));
+                    http.send(HttpRequest.newBuilder()
+                            .uri(URI.create(chromaPath("/collections/" + uuid + "/delete")))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(delBody))
+                            .timeout(Duration.ofSeconds(15)).build(),
+                            HttpResponse.BodyHandlers.ofString());
+                    System.out.println("[Chroma] 清理完成: 删除 " + idList.size() + " 条向量");
+                    return idList.size();
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[Chroma] 清理失败: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    /** 获取当前 Chroma 集合中所有向量 */
     public List<Map<String, Object>> listVectors(Long userId) {
         String collName = DEFAULT_COLLECTION;
         String uuid = getCollectionId(collName);
