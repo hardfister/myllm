@@ -38,7 +38,7 @@ public class RagService {
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
     private static final String CHROMA_API = "/api/v2/tenants/default_tenant/databases/default_database";
-    private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
+    private static final String DEFAULT_COLLECTION = "myllm_rag_v2";
 
     /** 缓存 collectionName → UUID */
     private final Map<String, String> collectionIdCache = new ConcurrentHashMap<>();
@@ -51,14 +51,7 @@ public class RagService {
             try {
                 Thread.sleep(3000);
                 String testColl = DEFAULT_COLLECTION;
-                getCollectionId(testColl);
-                float[] dummy = new float[]{0.1f, 0.2f, 0.3f};
-                System.out.println("[Chroma DIAG] 测试写...");
-                chromaUpsert(testColl, "__test__", dummy,
-                        Map.of("test", true, "timestamp", System.currentTimeMillis()));
-                Thread.sleep(500);
-                chromaDelete(testColl, "__test__");
-                System.out.println("[Chroma DIAG] ✅ 读写测试通过");
+                System.out.println("[Chroma DIAG] 跳过诊断测试 (避免锁定 collection 维度)");
             } catch (Exception e) {
                 System.err.println("[Chroma DIAG] ❌ 读写测试失败: " + e.getMessage());
             }
