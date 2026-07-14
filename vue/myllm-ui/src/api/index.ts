@@ -263,6 +263,9 @@ export function toggleRag(id: number): Promise<{ data: Rag }> {
 export function embedRag(id: number, modelId: number): Promise<{ data: Rag }> {
   return api.post(`/api/rags/${id}/embed?modelId=${modelId}`)
 }
+export function listVectors(userId?: number): Promise<{ data: any[] }> {
+  return api.get('/api/rags/vectors', { params: userId ? { userId } : {} })
+}
 
 // ==================== 聊天 ====================
 

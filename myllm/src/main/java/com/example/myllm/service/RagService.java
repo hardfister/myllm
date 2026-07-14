@@ -302,6 +302,49 @@ public class RagService {
         ragRepository.deleteById(id);
     }
 
+    // ===================== 向量数据查询 =====================
+
+    /** 获取当前用户 Chroma 集合中所有向量（分页） */
+    public List<Map<String, Object>> listVectors(Long userId) {
+        String collName = userCollection(userId);
+        ensureCollection(collName);
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/get"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                    .timeout(Duration.ofSeconds(10)).build();
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = mapper.readTree(resp.body());
+                JsonNode ids = root.get("ids");
+                JsonNode metas = root.get("metadatas");
+                List<Map<String, Object>> result = new ArrayList<>();
+                if (ids != null && ids.isArray()) {
+                    for (int i = 0; i < ids.size(); i++) {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("id", ids.get(i).asText());
+                        if (metas != null && metas.size() > i && metas.get(i) != null) {
+                            JsonNode meta = metas.get(i);
+                            if (meta.has("source")) item.put("source", meta.get("source").asText());
+                            if (meta.has("chunk_index")) item.put("chunkIndex", meta.get("chunk_index").asInt());
+                            if (meta.has("rag_id")) item.put("ragId", meta.get("rag_id").asLong());
+                            if (meta.has("text")) {
+                                String txt = meta.get("text").asText();
+                                item.put("text", txt.length() > 200 ? txt.substring(0, 200) + "..." : txt);
+                            }
+                        }
+                        result.add(item);
+                    }
+                }
+                return result;
+            }
+        } catch (Exception e) {
+            System.err.println("[Chroma] 列出向量失败: " + e.getMessage());
+        }
+        return List.of();
+    }
+
     /** 删除某文档的所有 Chroma 向量 */
     private void deleteVectors(Rag rag) {
         int cnt = rag.getChunkCount() != null ? rag.getChunkCount() : 0;

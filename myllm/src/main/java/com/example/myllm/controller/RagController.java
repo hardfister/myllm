@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 知识库文档控制器
@@ -73,5 +74,11 @@ public class RagController {
     @PostMapping("/{id}/embed")
     public Rag embedRag(@PathVariable Long id, @RequestParam("modelId") Long modelId) {
         return ragService.embedRag(id, modelId);
+    }
+
+    /** 获取 Chroma 中所有已存储的向量数据 */
+    @GetMapping("/vectors")
+    public List<Map<String, Object>> listVectors(@RequestParam(value = "userId", required = false) Long userId) {
+        return ragService.listVectors(userId);
     }
 }

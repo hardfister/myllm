@@ -12,7 +12,7 @@
  *   4. 向量化完成 → status=completed → 聊天时自动 RAG 检索
  */
 import { ref, onMounted } from 'vue'
-import { getRags, createRag, deleteRag, updateRag, toggleRag, embedRag } from '../api'
+import { getRags, createRag, deleteRag, updateRag, toggleRag, embedRag, listVectors } from '../api'
 import { getModels } from '../api'
 import { saveRags, loadRags } from '../services/localStorage'
 import { useAuth } from '../services/auth'
@@ -40,9 +40,21 @@ const chunkOverlap = ref(50)
 const chunkMethod = ref<'fixed_size' | 'paragraph' | 'sentence'>('fixed_size')
 
 // ===== 嵌入模型选择 =====
-const embeddingModels = ref<ModelConfig[]>([])        // 所有 ModelConfig（用户可在模型页配置）
-const selectedEmbeddingModelId = ref<number | null>(null)  // 当前选中的嵌入模型
-const embeddingInProgress = ref<Record<number, boolean>>({})  // 正在向量化的文档 ID
+const embeddingModels = ref<ModelConfig[]>([])
+const selectedEmbeddingModelId = ref<number | null>(null)
+const embeddingInProgress = ref<Record<number, boolean>>({})
+
+// ===== Chroma 向量数据展示 =====
+const vectors = ref<any[]>([])
+const showVectors = ref(false)
+const vectorsLoading = ref(false)
+
+const loadVectors = async () => {
+  vectorsLoading.value = true
+  try { const r = await listVectors(); vectors.value = r.data }
+  catch { vectors.value = [] }
+  finally { vectorsLoading.value = false; showVectors.value = true }
+}
 
 const useServer = () => isLoggedIn.value && !isOffline.value
 let localIdCounter = Date.now()
@@ -138,6 +150,7 @@ const handleEmbed = async (item: Rag) => {
   try {
     await embedRag(item.id, selectedEmbeddingModelId.value)
     await loadRagsData()
+    loadVectors()  // 刷新向量列表
   } catch (e) { console.error('向量化失败:', e); alert('向量化失败，请确认嵌入模型已配置 API Key') }
   finally { delete embeddingInProgress.value[item.id] }
 }
@@ -266,6 +279,26 @@ emit('updateColor', '#0d9488')
           ✅ 已选择：{{ embeddingModels.find(m => m.id === selectedEmbeddingModelId)?.displayName || embeddingModels.find(m => m.id === selectedEmbeddingModelId)?.modelName }}
           — 点击文档上的"⚡ 向量化"开始
         </div>
+
+        <!-- ===== Chroma 向量数据面板 ===== -->
+        <div class="vectors-section">
+          <div class="vectors-section-header" @click="showVectors ? (showVectors = false) : loadVectors()">
+            <h4>🧬 Chroma 向量数据</h4>
+            <span class="toggle-icon">{{ showVectors ? '▲' : '▼' }}</span>
+          </div>
+          <div v-if="showVectors" class="vectors-list">
+            <div v-if="vectorsLoading" style="text-align:center;color:#94a3b8;padding:20px;">加载中...</div>
+            <div v-else-if="vectors.length === 0" class="hint-text" style="text-align:center;padding:20px;">暂无向量数据，向量化文档后此处将显示</div>
+            <div v-else class="vector-item" v-for="v in vectors" :key="v.id">
+              <div class="vector-id">{{ v.id }}</div>
+              <div class="vector-meta">
+                <span class="v-badge">📄 {{ v.source || 'unknown' }}</span>
+                <span class="v-badge">📍 切片 #{{ v.chunkIndex ?? '?' }}</span>
+              </div>
+              <div class="vector-text">{{ v.text || '(无文本)' }}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -353,6 +386,18 @@ emit('updateColor', '#0d9488')
 .chip-provider { font-size: 10px; color: #94a3b8; background: rgba(0,0,0,0.04); padding: 2px 6px; border-radius: 4px; }
 .chip-warn { font-size: 10px; color: #dc2626; }
 .selected-hint { margin-top: 8px; font-size: 12px; color: #7c3aed; font-weight: 600; }
+.vectors-section { margin-top: 8px; padding: 12px; background: rgba(255,255,255,0.3); border-radius: 12px; border: 1px solid rgba(0,0,0,0.05); cursor: pointer; }
+.vectors-section-header { display: flex; justify-content: space-between; align-items: center; }
+.vectors-section-header h4 { margin: 0; font-size: 13px; color: #475569; }
+.toggle-icon { font-size: 12px; color: #94a3b8; }
+.vectors-list { margin-top: 10px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.vectors-list::-webkit-scrollbar { width: 3px; }
+.vectors-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
+.vector-item { padding: 10px 12px; background: rgba(255,255,255,0.5); border-radius: 8px; border: 1px solid rgba(0,0,0,0.05); }
+.vector-id { font-size: 10px; color: #94a3b8; font-family: monospace; margin-bottom: 4px; }
+.vector-meta { display: flex; gap: 8px; margin-bottom: 6px; }
+.v-badge { font-size: 10px; color: #64748b; background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 4px; }
+.vector-text { font-size: 11px; color: #475569; line-height: 1.5; word-break: break-all; max-height: 80px; overflow: hidden; }
 
 /* ===== 弹窗复用 ===== */
 .login-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15,23,42,0.2); display: flex; align-items: center; justify-content: center; z-index: 400; backdrop-filter: blur(8px); }
