@@ -22,8 +22,8 @@ let localIdCounter = Date.now()
 const dragIndex = ref<number | null>(null)
 
 const currentConfig = ref({
-  id: 0 as number | undefined, modelName: 'DeepSeek-Chat', provider: 'DeepSeek',
-  apiKeyEncrypted: '', baseUrl: 'https://api.deepseek.com', maxTokens: 4096, prompt: '',
+  id: 0 as number | undefined, modelName: 'deepseek-v4-flash', provider: 'DeepSeek',
+  apiKeyEncrypted: '', baseUrl: 'https://api.deepseek.com/v1', maxTokens: 4096, prompt: '',
   displayName: '', title: '', color: '#1e3a8a'
 })
 
@@ -42,7 +42,7 @@ const loadModelsData = async () => {
 onMounted(loadModelsData)
 const persistModels = () => { if (!useServer()) saveModels(models.value) }
 
-const handleNewConfig = () => { isEditing.value = false; currentConfig.value = { id: undefined, modelName: 'DeepSeek-Chat', provider: 'DeepSeek', apiKeyEncrypted: '', baseUrl: 'https://api.deepseek.com', maxTokens: 4096, prompt: '', displayName: '', title: '', color: '#1e3a8a' }; showModelModal.value = true }
+const handleNewConfig = () => { isEditing.value = false; currentConfig.value = { id: undefined, modelName: 'deepseek-v4-flash', provider: 'DeepSeek', apiKeyEncrypted: '', baseUrl: 'https://api.deepseek.com', maxTokens: 4096, prompt: '', displayName: '', title: '', color: '#1e3a8a' }; showModelModal.value = true }
 const handleEditConfig = (item: ModelConfig, event: Event) => { event.stopPropagation(); isEditing.value = true; const meta = frontendMeta.value[item.id!] || { title: '', color: '#1e3a8a' }; currentConfig.value = { id: item.id, modelName: item.modelName, provider: item.provider, apiKeyEncrypted: item.apiKeyEncrypted || '', baseUrl: item.baseUrl || '', maxTokens: item.maxTokens || 4096, prompt: item.prompt || '', displayName: item.displayName || '', title: meta.title, color: meta.color }; showModelModal.value = true }
 const handleToggle = async (item: ModelConfig, event: Event) => { event.stopPropagation(); if (item.id == null) return; if (useServer()) { await toggleModel(item.id); await loadModelsData() } else { const t = models.value.find(m => m.id === item.id); if (t) { t.isEnabled = t.isEnabled === 1 ? 0 : 1; persistModels() } } }
 const confirmModel = (m: { model: string; apiKey: string; provider: string; baseUrl: string }) => { currentConfig.value.modelName = m.model; currentConfig.value.apiKeyEncrypted = m.apiKey; currentConfig.value.provider = m.provider; currentConfig.value.baseUrl = m.baseUrl; showModelModal.value = false; step.value = 'rule' }
@@ -100,11 +100,11 @@ const getColor = (m: ModelConfig) => frontendMeta.value[m.id!]?.color || '#1e3a8
 .multi-hint { font-size: 12px; color: #7c3aed; background: rgba(124,58,237,0.08); padding: 4px 12px; border-radius: 10px; font-weight: 600; }
 .new-btn { padding: 10px 20px; font-weight: bold; background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.1); border-radius: 10px; cursor: pointer; }
 .records-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-.record-card { display: flex; align-items: center; padding: 14px; background: rgba(255,255,255,0.6); border-radius: 12px; transition: all 0.2s; cursor: grab; gap: 10px; }
+.record-card { display: flex; align-items: center; padding: 14px; background: rgba(255,255,255,0.6); border-radius: 12px; transition: all 0.2s; gap: 10px; user-select: text; }
 .record-card:hover { background: rgba(255,255,255,0.85); }
-.record-card:active { cursor: grabbing; }
 .record-card.is-enabled { background: rgba(255,255,255,0.8); }
 .drag-handle { font-size: 18px; color: #94a3b8; cursor: grab; user-select: none; padding: 0 4px; flex-shrink: 0; }
+.drag-handle:active { cursor: grabbing; }
 .card-info { flex: 1; min-width: 0; cursor: pointer; }
 .title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .toggle-check { font-size: 16px; color: var(--theme-color); flex-shrink: 0; }

@@ -28,6 +28,8 @@ const uploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const dragOver = ref(false)
+const textInput = ref('')                // 直接粘贴文本
+const inputMode = ref<'file' | 'text'>('file')  // 文件上传 / 文本粘贴
 const editingRag = ref<Rag | null>(null)
 const showEditModal = ref(false)
 
@@ -67,41 +69,66 @@ const onDragOver = (e: DragEvent) => { e.preventDefault(); dragOver.value = true
 const onDragLeave = () => { dragOver.value = false }
 const onDrop = (e: DragEvent) => { e.preventDefault(); dragOver.value = false; if (e.dataTransfer?.files?.[0]) selectedFile.value = e.dataTransfer.files[0] }
 
-// ===== 文件上传 =====
+// ===== 上传/粘贴 =====
 const handleUpload = async () => {
-  if (!selectedFile.value) { alert('请先选择文件'); return }
+  if (inputMode.value === 'file' && !selectedFile.value) { alert('请先选择文件'); return }
+  if (inputMode.value === 'text' && !textInput.value.trim()) { alert('请先输入文本'); return }
   uploading.value = true
   try {
     let success = false
     if (useServer()) {
       try {
-        const fd = new FormData()
-        fd.append('file', selectedFile.value)
-        fd.append('collectionName', collectionName.value)
-        fd.append('chunkSize', String(chunkSize.value))
-        fd.append('chunkOverlap', String(chunkOverlap.value))
-        fd.append('chunkMethod', chunkMethod.value)
-        await createRag(fd)
+        if (inputMode.value === 'file' && selectedFile.value) {
+          const fd = new FormData()
+          fd.append('file', selectedFile.value)
+          fd.append('collectionName', collectionName.value)
+          fd.append('chunkSize', String(chunkSize.value))
+          fd.append('chunkOverlap', String(chunkOverlap.value))
+          fd.append('chunkMethod', chunkMethod.value)
+          await createRag(fd)
+        } else {
+          // 文本粘贴 → 创建 Blob → FormData
+          const blob = new Blob([textInput.value], { type: 'text/plain' })
+          const fd = new FormData()
+          fd.append('file', blob, 'pasted-text-' + Date.now() + '.txt')
+          fd.append('collectionName', collectionName.value)
+          fd.append('chunkSize', String(chunkSize.value))
+          fd.append('chunkOverlap', String(chunkOverlap.value))
+          fd.append('chunkMethod', chunkMethod.value)
+          await createRag(fd)
+        }
         await loadRagsData()
         success = true
       } catch (e) {
         console.warn('服务器上传失败，降级到本地存储:', e)
-        alert('⚠️ 上传到服务器失败\n文件已保存到浏览器本地存储。')
+        alert('上传到服务器失败\n数据已保存到浏览器本地存储。')
       }
     }
     if (!success) {
-      const reader = new FileReader()
-      const fileData = await new Promise<string>(r => { reader.onload = () => r(reader.result as string); reader.readAsDataURL(selectedFile.value!) })
-      rags.value.unshift({ id: ++localIdCounter, filename: selectedFile.value!.name, fileSize: selectedFile.value!.size,
-        fileType: selectedFile.value!.type || 'unknown', collectionName: collectionName.value, chunkCount: 0,
+      const content = inputMode.value === 'file' ? await readFileAsBase64() : textInput.value
+      rags.value.unshift({
+        id: ++localIdCounter,
+        filename: inputMode.value === 'file' ? selectedFile.value!.name : '粘贴文本.txt',
+        fileSize: content.length, fileType: 'text/plain',
+        collectionName: collectionName.value, chunkCount: 0,
         chunkSize: chunkSize.value, chunkOverlap: chunkOverlap.value, chunkMethod: chunkMethod.value,
-        status: 'completed', description: '', filePath: fileData, isEnabled: 0 })
+        status: 'uploaded', description: '', filePath: content, isEnabled: 0
+      })
       persistRags()
     }
-    selectedFile.value = null; showUploadForm.value = false
+    selectedFile.value = null; textInput.value = ''
+    showUploadForm.value = false
     collectionName.value = 'default_collection'; chunkSize.value = 500; chunkOverlap.value = 50; chunkMethod.value = 'fixed_size'
   } catch (e) { console.error('上传失败:', e); alert('上传失败') }
   finally { uploading.value = false }
+}
+
+const readFileAsBase64 = (): Promise<string> => {
+  return new Promise(r => {
+    const reader = new FileReader()
+    reader.onload = () => r(reader.result as string)
+    reader.readAsDataURL(selectedFile.value!)
+  })
 }
 
 // ===== 向量化 =====
@@ -160,12 +187,20 @@ emit('updateColor', '#0d9488')
 
       <!-- ===== 上传表单 ===== -->
       <div v-if="showUploadForm" class="upload-form">
-        <h4>📄 上传文档</h4>
-        <div :class="['drop-zone', { 'drag-over': dragOver }]" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop" @click="fileInput?.click()">
-          <div v-if="!selectedFile" class="drop-text"><span class="drop-icon">📁</span><p>拖拽文件到此处，或点击选择</p><p class="hint">支持 TXT / MD / CSV / JSON</p></div>
+        <h4>📄 新建知识库</h4>
+        <!-- 模式切换 -->
+        <div class="mode-tabs">
+          <button :class="['mode-tab', { active: inputMode === 'file' }]" @click="inputMode = 'file'">📁 上传文件</button>
+          <button :class="['mode-tab', { active: inputMode === 'text' }]" @click="inputMode = 'text'">📝 粘贴文本</button>
+        </div>
+        <!-- 文件上传区 -->
+        <div v-if="inputMode === 'file'" :class="['drop-zone', { 'drag-over': dragOver }]" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop" @click="fileInput?.click()">
+          <div v-if="!selectedFile" class="drop-text"><span class="drop-icon">📁</span><p>拖拽文件到此处，或点击选择</p><p class="hint">支持 TXT / MD / CSV / JSON / PDF / DOCX / HTML</p></div>
           <div v-else class="selected-file"><span class="file-icon">📄</span><span>{{ selectedFile.name }}</span><span class="file-size">{{ formatFileSize(selectedFile.size) }}</span></div>
         </div>
-        <input ref="fileInput" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,.html" style="display:none" @change="onFileChange" />
+        <input v-if="inputMode === 'file'" ref="fileInput" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,.doc,.html,.htm,.xml,.yaml,.yml,.log,.py,.js,.ts,.java,.c,.cpp,.rs,.go,.rb,.sh,.bat,.ps1,.ini,.cfg,.toml" style="display:none" @change="onFileChange" />
+        <!-- 文本粘贴区 -->
+        <textarea v-if="inputMode === 'text'" v-model="textInput" class="text-paste-area" rows="8" placeholder="在此粘贴文本内容...&#10;&#10;支持纯文本、Markdown、代码等"></textarea>
         <div class="chunk-config-section">
           <h5>🔪 切片配置</h5>
           <div class="chunk-config-grid">
@@ -175,7 +210,7 @@ emit('updateColor', '#0d9488')
             <div class="form-item" v-if="chunkMethod !== 'paragraph'"><label>重叠（字符）：</label><input type="number" v-model="chunkOverlap" class="styled-input" min="0" max="2000" step="50" /></div>
           </div>
         </div>
-        <button class="upload-btn" :disabled="!selectedFile || uploading" @click="handleUpload">{{ uploading ? '上传中...' : '确认上传' }}</button>
+        <button class="upload-btn" :disabled="(inputMode === 'file' && !selectedFile) || (inputMode === 'text' && !textInput.trim()) || uploading" @click="handleUpload">{{ uploading ? '上传中...' : inputMode === 'text' ? '确认提交' : '确认上传' }}</button>
       </div>
 
       <!-- ===== 文档卡片列表 ===== -->
@@ -280,6 +315,10 @@ emit('updateColor', '#0d9488')
 .styled-input { padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); outline: none; font-size: 13px; }
 .upload-btn { padding: 12px 24px; background: #0d9488; color: #fff; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; }
 .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mode-tabs { display: flex; gap: 0; border-radius: 10px; overflow: hidden; border: 1px solid rgba(0,0,0,0.1); margin-bottom: 4px; }
+.mode-tab { flex: 1; padding: 10px; border: none; background: rgba(0,0,0,0.03); cursor: pointer; font-size: 13px; font-weight: 600; color: #64748b; transition: all 0.2s; }
+.mode-tab.active { background: white; color: #0d9488; }
+.text-paste-area { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); outline: none; font-size: 13px; font-family: monospace; resize: vertical; box-sizing: border-box; }
 .records-grid { display: flex; flex-direction: column; gap: 10px; }
 .record-card { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: rgba(255,255,255,0.6); border-radius: 12px; transition: background 0.2s; }
 .record-card:hover { background: rgba(255,255,255,0.85); }

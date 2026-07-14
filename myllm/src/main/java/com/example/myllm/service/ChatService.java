@@ -226,7 +226,7 @@ public class ChatService {
             return null;
         }
         String modelName = mc.getModelName() != null && !mc.getModelName().isBlank()
-                ? mc.getModelName() : "deepseek-chat";
+                ? mc.getModelName() : "deepseek-v4-flash";
         int maxTokens = mc.getMaxTokens() != null ? mc.getMaxTokens() : 4096;
 
         try {
@@ -267,7 +267,7 @@ public class ChatService {
             return null;
         }
         String modelName = mc.getModelName() != null && !mc.getModelName().isBlank()
-                ? mc.getModelName() : "deepseek-chat";
+                ? mc.getModelName() : "deepseek-v4-flash";
         int maxTokens = mc.getMaxTokens() != null ? mc.getMaxTokens() : 4096;
 
         try {
