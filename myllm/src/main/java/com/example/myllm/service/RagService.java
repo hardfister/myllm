@@ -37,7 +37,7 @@ public class RagService {
             .connectTimeout(Duration.ofSeconds(10)).build();
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
-    private static final String CHROMA_API = "/api/v1";  // v1 API 最稳定
+    private static final String CHROMA_API = "/api/v2";
     private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
 
     /** 缓存 collectionName → UUID */
@@ -76,20 +76,20 @@ public class RagService {
         return CHROMA_URL + CHROMA_API + suffix;
     }
 
-    /** 通过名称获取或创建集合，返回 UUID */
+    /** 通过名称获取集合的 UUID（v2 写操作需要 UUID 而不是名称） */
     private String getCollectionId(String collectionName) {
         if (collectionIdCache.containsKey(collectionName)) return collectionIdCache.get(collectionName);
-        // v1: GET /api/v1/collections?name=xxx
+        // v2: GET /api/v2/collections/{name} 返回 {id, name, ...}
         try {
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
-                .uri(URI.create(chromaPath("/collections?name=" + collectionName))).GET().build(),
+                .uri(URI.create(chromaPath("/collections/" + collectionName))).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
-                JsonNode arr = mapper.readTree(resp.body());
-                if (arr.isArray() && arr.size() > 0) {
-                    String uuid = arr.get(0).get("id").asText();
+                JsonNode root = mapper.readTree(resp.body());
+                if (root.has("id")) {
+                    String uuid = root.get("id").asText();
                     collectionIdCache.put(collectionName, uuid);
-                    System.out.println("[Chroma] " + collectionName + " → UUID=" + uuid);
+                    System.out.println("[Chroma] " + collectionName + " UUID=" + uuid);
                     return uuid;
                 }
             }
@@ -107,14 +107,16 @@ public class RagService {
                 JsonNode root = mapper.readTree(resp.body());
                 String uuid = root.get("id").asText();
                 collectionIdCache.put(collectionName, uuid);
-                System.out.println("[Chroma] " + collectionName + " 已创建 UUID=" + uuid);
+                System.out.println("[Chroma] " + collectionName + " created UUID=" + uuid);
                 return uuid;
             }
         } catch (Exception e) {
-            System.err.println("[Chroma] 创建 " + collectionName + " 失败: " + e.getMessage());
+            System.err.println("[Chroma] create failed: " + e.getMessage());
         }
-        collectionIdCache.put(collectionName, DEFAULT_COLLECTION);
-        return DEFAULT_COLLECTION;
+        // Fallback: use name as ID (won't work for writes but allows reads to proceed)
+        System.out.println("[Chroma] WARN: could not resolve UUID for " + collectionName + ", using name");
+        collectionIdCache.put(collectionName, collectionName);
+        return collectionName;
     }
 
     // ===================== CRUD =====================
@@ -359,7 +361,9 @@ public class RagService {
         try {
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
                     .uri(URI.create(chromaPath("/collections/" + uuid + "/get")))
-                    .GET()
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                        mapper.writeValueAsString(Map.of("include", List.of("metadatas")))))
                     .timeout(Duration.ofSeconds(10)).build(),
                     HttpResponse.BodyHandlers.ofString());
             String body = resp.body();
