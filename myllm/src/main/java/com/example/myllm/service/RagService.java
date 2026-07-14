@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,9 +37,11 @@ public class RagService {
             .connectTimeout(Duration.ofSeconds(10)).build();
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
-    private static final String CHROMA_V2_PREFIX = "/api/v2";
-    private static final String COLLECTION_PREFIX = "myllm_rag_";
+    private static final String CHROMA_API = "/api/v1";  // v1 API 最稳定
     private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
+
+    /** 缓存 collectionName → UUID */
+    private final Map<String, String> collectionIdCache = new ConcurrentHashMap<>();
 
     public RagService(RagRepository ragRepository, ModelConfigRepository modelConfigRepo) {
         this.ragRepository = ragRepository;
@@ -48,15 +51,14 @@ public class RagService {
             try {
                 Thread.sleep(3000);
                 String testColl = DEFAULT_COLLECTION;
-                ensureCollection(testColl);
-                // 尝试写一条测试向量然后立即删掉
+                getCollectionId(testColl);
                 float[] dummy = new float[]{0.1f, 0.2f, 0.3f};
-                System.out.println("[Chroma DIAG] 尝试写入测试向量...");
+                System.out.println("[Chroma DIAG] 测试写...");
                 chromaUpsert(testColl, "__test__", dummy,
                         Map.of("test", true, "timestamp", System.currentTimeMillis()));
                 Thread.sleep(500);
                 chromaDelete(testColl, "__test__");
-                System.out.println("[Chroma DIAG] ✅ 读写测试通过 — 端点格式正确");
+                System.out.println("[Chroma DIAG] ✅ 读写测试通过");
             } catch (Exception e) {
                 System.err.println("[Chroma DIAG] ❌ 读写测试失败: " + e.getMessage());
             }
@@ -71,29 +73,48 @@ public class RagService {
     }
 
     private String chromaPath(String suffix) {
-        return CHROMA_URL + CHROMA_V2_PREFIX + suffix;
+        return CHROMA_URL + CHROMA_API + suffix;
     }
 
-    private void ensureCollection(String collectionName) {
-        String path = chromaPath("/collections/" + collectionName);
+    /** 通过名称获取或创建集合，返回 UUID */
+    private String getCollectionId(String collectionName) {
+        if (collectionIdCache.containsKey(collectionName)) return collectionIdCache.get(collectionName);
+        // v1: GET /api/v1/collections?name=xxx
         try {
-            HttpResponse<String> resp = http.send(
-                HttpRequest.newBuilder().uri(URI.create(path)).GET().build(),
+            HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
+                .uri(URI.create(chromaPath("/collections?name=" + collectionName))).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) { System.out.println("[Chroma] " + collectionName + " 已存在"); return; }
+            if (resp.statusCode() == 200) {
+                JsonNode arr = mapper.readTree(resp.body());
+                if (arr.isArray() && arr.size() > 0) {
+                    String uuid = arr.get(0).get("id").asText();
+                    collectionIdCache.put(collectionName, uuid);
+                    System.out.println("[Chroma] " + collectionName + " → UUID=" + uuid);
+                    return uuid;
+                }
+            }
         } catch (Exception ignored) {}
+        // 不存在则创建
         try {
             String body = mapper.writeValueAsString(Map.of("name", collectionName));
-            http.send(HttpRequest.newBuilder()
+            HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
                 .uri(URI.create(chromaPath("/collections")))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .timeout(Duration.ofSeconds(10)).build(),
                 HttpResponse.BodyHandlers.ofString());
-            System.out.println("[Chroma] " + collectionName + " 已创建");
+            if (resp.statusCode() == 200 || resp.statusCode() == 201) {
+                JsonNode root = mapper.readTree(resp.body());
+                String uuid = root.get("id").asText();
+                collectionIdCache.put(collectionName, uuid);
+                System.out.println("[Chroma] " + collectionName + " 已创建 UUID=" + uuid);
+                return uuid;
+            }
         } catch (Exception e) {
             System.err.println("[Chroma] 创建 " + collectionName + " 失败: " + e.getMessage());
         }
+        collectionIdCache.put(collectionName, DEFAULT_COLLECTION);
+        return DEFAULT_COLLECTION;
     }
 
     // ===================== CRUD =====================
@@ -150,7 +171,7 @@ public class RagService {
 
         RagErrorDetail errorDetail = new RagErrorDetail();
         String collName = userCollection(rag.getUserId());
-        ensureCollection(collName);
+        getCollectionId(collName);
 
         // ─── 步骤 1: 读文件 ───
         errorDetail.step = "read_file";
@@ -333,19 +354,16 @@ public class RagService {
     /** 获取当前用户 Chroma 集合中所有向量（分页） */
     public List<Map<String, Object>> listVectors(Long userId) {
         String collName = DEFAULT_COLLECTION;
-        System.out.println("[Chroma] listVectors userId=" + userId + " coll=" + collName);
-        ensureCollection(collName);
+        String uuid = getCollectionId(collName);
+        System.out.println("[Chroma] listVectors userId=" + userId + " coll=" + collName + " uuid=" + uuid);
         try {
-            // Chroma v2: POST /get 需要显式声明 include 才会返回 metadatas
-            String reqBody = mapper.writeValueAsString(Map.of("include", List.of("metadatas")));
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/get")))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(reqBody))
-                    .timeout(Duration.ofSeconds(10)).build();
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
+                    .uri(URI.create(chromaPath("/collections/" + uuid + "/get")))
+                    .GET()
+                    .timeout(Duration.ofSeconds(10)).build(),
+                    HttpResponse.BodyHandlers.ofString());
             String body = resp.body();
-            System.out.println("[Chroma] /get 返回 HTTP " + resp.statusCode() + " body长度=" + body.length());
+            System.out.println("[Chroma] /get HTTP " + resp.statusCode() + " len=" + body.length());
             if (body.length() > 0) System.out.println("[Chroma] /get body预览: " + body.substring(0, Math.min(500, body.length())));
             if (resp.statusCode() == 200) {
                 JsonNode root = mapper.readTree(body);
@@ -403,7 +421,7 @@ public class RagService {
 
             // 统一使用默认集合检索
             String collName = DEFAULT_COLLECTION;
-            ensureCollection(collName);
+            getCollectionId(collName);
             return chromaQuery(collName, queryVec, topK).stream()
                     .filter(r -> r.get("content") != null)
                     .filter(r -> {
@@ -470,7 +488,7 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            // Chroma v2: POST /collections/{name}/add
+            String uuid = getCollectionId(collName);
             List<Float> embList = new ArrayList<>(vector.length);
             for (float v : vector) embList.add(v);
             String body = mapper.writeValueAsString(Map.of(
@@ -478,18 +496,17 @@ public class RagService {
                     "embeddings", List.of(embList),
                     "metadatas", List.of(metadata)));
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/add")))
+                    .uri(URI.create(chromaPath("/collections/" + uuid + "/add")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build(),
                     HttpResponse.BodyHandlers.ofString());
-            int code = resp.statusCode();
-            System.out.println("[Chroma] upsert " + collName + "/" + id + " → HTTP " + code);
-            if (code >= 400) {
+            System.out.println("[Chroma] add " + uuid + "/" + id + " → HTTP " + resp.statusCode());
+            if (resp.statusCode() >= 400) {
                 System.err.println("[Chroma] " + resp.body().substring(0, Math.min(300, resp.body().length())));
             }
         } catch (Exception e) {
-            System.err.println("[Chroma] upsert 异常 coll=" + collName + " id=" + id + ": " + e.getMessage());
+            System.err.println("[Chroma] upsert 异常: " + e.getMessage());
         }
     }
 
@@ -502,11 +519,12 @@ public class RagService {
 
     private List<Map<String, Object>> chromaQuery(String collName, float[] vector, int topK) {
         try {
+            String uuid = getCollectionId(collName);
             String body = mapper.writeValueAsString(Map.of(
                     "query_embeddings", List.of(vector), "n_results", topK,
                     "include", List.of("metadatas", "documents", "distances")));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/query")))
+                    .uri(URI.create(chromaPath("/collections/" + uuid + "/query")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(15)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
@@ -537,12 +555,12 @@ public class RagService {
 
     private void chromaDelete(String collName, String id) {
         try {
-            // Chroma v2 删除: POST /collections/{name}/delete body={"ids":["..."]}
-            String body = mapper.writeValueAsString(Map.of("ids", List.of(id)));
+            String uuid = getCollectionId(collName);
             http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/delete")))
+                    .uri(URI.create(chromaPath("/collections/" + uuid + "/delete")))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                        mapper.writeValueAsString(Map.of("ids", List.of(id)))))
                     .timeout(Duration.ofSeconds(5)).build(),
                     HttpResponse.BodyHandlers.ofString());
         } catch (Exception ignored) {}
