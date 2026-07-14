@@ -62,8 +62,8 @@ public class RagService {
     }
 
     /**
-     * 上传文档 → 提取文本 → 切片 → MySQL 保存（status=pending）
-     * 不自动向量化，用户需自行选择嵌入模型后点击"向量化"按钮。
+     * 上传文档 → 保存文件到磁盘 + MySQL（status=uploaded），不做任何文本处理。
+     * 切片和向量化由后续的 embed 步骤完成。
      */
     @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
@@ -77,14 +77,11 @@ public class RagService {
         Path target = uploadPath.resolve(stored);
         file.transferTo(target.toFile());
 
-        String text = extractText(target);
+        String collName = (collectionName != null && !collectionName.isBlank())
+                ? collectionName : COLLECTION_NAME;
         int cs = (chunkSize != null && chunkSize > 0) ? chunkSize : 500;
         int co = (chunkOverlap != null && chunkOverlap >= 0) ? chunkOverlap : 50;
         String cm = (chunkMethod != null && !chunkMethod.isBlank()) ? chunkMethod : "fixed_size";
-        List<String> chunks = chunkText(text, cs, co, cm);
-
-        String collName = (collectionName != null && !collectionName.isBlank())
-                ? collectionName : COLLECTION_NAME;
 
         Rag rag = new Rag();
         rag.setFilename(originalFilename != null ? originalFilename : "unknown");
@@ -93,19 +90,18 @@ public class RagService {
         rag.setFileType(file.getContentType());
         rag.setCollectionName(collName);
         rag.setChunkSize(cs); rag.setChunkOverlap(co); rag.setChunkMethod(cm);
-        rag.setChunkCount(chunks.size());
-        rag.setContent(String.join("\n---CHUNK---\n", chunks));
-        rag.setStatus("pending");  // 等待用户手动向量化
-        rag = ragRepository.save(rag);
+        rag.setChunkCount(0);
+        rag.setContent(null);
+        rag.setStatus("uploaded");  // 仅保存，待后续切片+向量化
 
-        System.out.println("[RAG] 📄 文档已接收: " + originalFilename + " (" + chunks.size() + " 切片, 待向量化)");
-        return rag;
+        System.out.println("[RAG] 文件已保存: " + originalFilename + " (" + rag.getFileSize() + " bytes)");
+        return ragRepository.save(rag);
     }
 
     /**
-     * 向量化指定文档 — 使用用户选择的嵌入模型 API
+     * 向量化指定文档 — 现在包括提取文本+切片+向量化三步
      * @param ragId   文档 ID
-     * @param modelId 嵌入模型 ID（ModelConfig 中的一行，需配置 apiKey/baseUrl/modelName）
+     * @param modelId 嵌入模型 ID
      */
     @CacheEvict(value = {"rag_list", "rag_search"}, allEntries = true)
     @Transactional
@@ -115,17 +111,40 @@ public class RagService {
         ModelConfig embeddingModel = modelConfigRepo.findById(modelId)
                 .orElseThrow(() -> new RuntimeException("嵌入模型不存在: " + modelId));
 
+        // 1. 如果还没切片，从磁盘文件提取文本并切片
         if (rag.getContent() == null || rag.getContent().isBlank()) {
-            rag.setStatus("failed");
-            return ragRepository.save(rag);
+            if (rag.getFilePath() == null) {
+                rag.setStatus("failed");
+                return ragRepository.save(rag);
+            }
+            Path filePath = Paths.get(rag.getFilePath());
+            if (!Files.exists(filePath)) {
+                rag.setStatus("failed");
+                return ragRepository.save(rag);
+            }
+            rag.setStatus("chunking");
+            try {
+                String text = extractText(filePath);
+                int cs = rag.getChunkSize() != null ? rag.getChunkSize() : 500;
+                int co = rag.getChunkOverlap() != null ? rag.getChunkOverlap() : 50;
+                String cm = rag.getChunkMethod() != null ? rag.getChunkMethod() : "fixed_size";
+                List<String> chunks = chunkText(text, cs, co, cm);
+                rag.setChunkCount(chunks.size());
+                rag.setContent(String.join("---CHUNK---", chunks));
+                System.out.println("[RAG] 切片完成: " + rag.getFilename() + " → " + chunks.size() + " 片");
+            } catch (Exception e) {
+                rag.setStatus("failed");
+                System.err.println("[RAG] 切片失败: " + e.getMessage());
+                return ragRepository.save(rag);
+            }
         }
 
+        // 2. 向量化
         rag.setStatus("embedding");
         rag.setEmbeddingModelId(modelId);
         ragRepository.save(rag);
 
         try {
-            // 还原切片
             String[] chunks = rag.getContent().split("---CHUNK---");
             int successCount = 0;
             for (int i = 0; i < chunks.length; i++) {
@@ -140,12 +159,12 @@ public class RagService {
                 }
             }
             rag.setStatus("completed");
-            System.out.println("[RAG] ✅ 向量化完成: doc=" + rag.getFilename()
+            System.out.println("[RAG] 向量化完成: doc=" + rag.getFilename()
                     + " 切片=" + successCount + "/" + chunks.length
                     + " 模型=" + embeddingModel.getModelName());
         } catch (Exception e) {
             rag.setStatus("failed");
-            System.err.println("[RAG] ❌ 向量化失败: " + e.getMessage());
+            System.err.println("[RAG] 向量化失败: " + e.getMessage());
         }
         return ragRepository.save(rag);
     }
@@ -167,15 +186,11 @@ public class RagService {
         if (updated.getChunkMethod() != null) ex.setChunkMethod(updated.getChunkMethod());
 
         boolean needRechunk = (updated.getChunkSize() != null || updated.getChunkMethod() != null);
-        if (needRechunk && ex.getContent() != null && !ex.getContent().isBlank()) {
-            String raw = ex.getContent().replace("---CHUNK---", "");
-            int cs = ex.getChunkSize() != null ? ex.getChunkSize() : 500;
-            int co = ex.getChunkOverlap() != null ? ex.getChunkOverlap() : 50;
-            String cm = ex.getChunkMethod() != null ? ex.getChunkMethod() : "fixed_size";
-            List<String> chunks = chunkText(raw, cs, co, cm);
-            ex.setChunkCount(chunks.size());
-            ex.setContent(String.join("\n---CHUNK---\n", chunks));
-            ex.setStatus("pending");  // 切片变更后需重新向量化
+        if (needRechunk) {
+            // 切片参数变更 → 清除旧切片数据 → 下次向量化时重新从文件提取
+            ex.setContent(null);
+            ex.setChunkCount(0);
+            ex.setStatus("uploaded");  // 回退到未切片状态，需重新向量化
         }
         return ragRepository.save(ex);
     }

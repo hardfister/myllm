@@ -144,8 +144,8 @@ const handleDelete = async (id: number, event: Event) => {
 
 // ===== 工具 =====
 const formatFileSize = (b: number) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB'
-const statusLabel = (s?: string): string => ({ completed: '✅ 已向量化', embedding: '⏳ 向量化中', pending: '⏸ 待向量化', failed: '❌ 失败' } as Record<string, string>)[s || 'pending'] || s || 'pending'
-const statusColor = (s?: string): string => ({ completed: '#16a34a', embedding: '#ea580c', pending: '#94a3b8', failed: '#dc2626' } as Record<string, string>)[s || 'pending'] || '#94a3b8'
+const statusLabel = (s?: string): string => ({ completed: '✅ 已向量化', embedding: '⏳ 向量化中', chunking: '📝 切片中', uploaded: '📄 已上传', pending: '⏸ 待处理', failed: '❌ 失败' } as Record<string, string>)[s || ''] || s || ''
+const statusColor = (s?: string): string => ({ completed: '#16a34a', embedding: '#ea580c', chunking: '#ca8a04', uploaded: '#0284c7', pending: '#94a3b8', failed: '#dc2626' } as Record<string, string>)[s || ''] || '#94a3b8'
 
 emit('updateColor', '#0d9488')
 </script>
@@ -246,7 +246,7 @@ emit('updateColor', '#0d9488')
             <div class="form-item" v-if="editingRag?.chunkMethod !== 'paragraph'"><label>切片大小</label><input type="number" v-model="editingRag!.chunkSize" class="styled-input" min="100" max="10000" /></div>
             <div class="form-item" v-if="editingRag?.chunkMethod !== 'paragraph'"><label>重叠</label><input type="number" v-model="editingRag!.chunkOverlap" class="styled-input" min="0" max="2000" /></div>
             <div class="form-item"><label>切片数：<strong>{{ editingRag?.chunkCount || 0 }}</strong> | 状态：<strong :style="{color:statusColor(editingRag?.status)}">{{ statusLabel(editingRag?.status) }}</strong></label></div>
-            <p style="font-size:11px;color:#94a3b8;">修改切片参数后状态变为待向量化，需重新点击向量化</p>
+            <p style="font-size:11px;color:#94a3b8;">修改切片参数后需重新点击向量化（上传时只保存文件，向量化时才提取文本+切片）</p>
             <button class="submit-btn" @click="saveEdit">保存</button>
           </div>
         </div>
