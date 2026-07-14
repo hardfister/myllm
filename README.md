@@ -587,6 +587,34 @@ mysql -u root -p < docs/myllm_db.sql
 
 **解决**：删除 SQL 中所有 INSERT 测试数据，表结构完整保留，用户通过前端 UI 注册并录入数据。
 
+### 10. Chroma 向量写入端点反复 404/405
+
+**现象**：向量化成功（embedding 返回 1536 维向量），但 Chroma 写入始终返回 HTTP 404 或 405，listVectors 返回空数组 `{"ids":[]}`。
+
+**根因**（四重）：
+1. 端点名称错误：Chroma v2 中不存在 `/documents` 端点。正确端点为 `/upsert`。
+2. URL 缺少 tenant/database 前缀：Chroma v2 写操作需要完整路径 `/api/v2/tenants/default_tenant/databases/default_database/collections/{UUID}/upsert`，短路径只对 GET 有效。
+3. 集合路由需要 UUID 而非名称：GET `/collections/my_rag_name` 返回 `{id: "xxxxxxxx-...", name: "my_rag_name"}`，写操作必须用 `id` 字段（UUID），不能用 `name`。
+4. 诊断测试锁定维度：启动时写入一条 3 维 dummy 向量 `[0.1, 0.2, 0.3]`，Chroma 将集合 `dimension` 锁定为 3。后续 1536 维真实向量 upsert 时：`expected 3, got 1536` → HTTP 400。
+
+**解决**：
+1. 端点改为 `/upsert`
+2. URL 拼接 `CHROMA_API = "/api/v2/tenants/default_tenant/databases/default_database"`
+3. 新增 `getCollectionId(String name)` — GET 集合元数据 → 解析 `id` 字段 → UUID → 缓存到 `ConcurrentHashMap`
+4. 移除启动诊断中有写操作的 `chromaUpsert(dummy)` 调用；集合名改为 `myllm_rag_v2`，首次真实向量化时自然匹配 1536 维
+
+**Chroma 四种操作的正确调用方式**：
+
+| 操作 | HTTP | 端点 |
+|------|------|------|
+| 查询/创建集合 | `GET` / `POST` | `/api/v2/collections/{name}` |
+| 写入向量 | `POST` | `/api/v2/tenants/default_tenant/databases/default_database/collections/{UUID}/upsert` |
+| 向量检索 | `POST` | `.../collections/{UUID}/query` |
+| 列出向量 | `POST` | `.../collections/{UUID}/get` |
+| 删除向量 | `POST` | `.../collections/{UUID}/delete` |
+
+> 请求体均为 JSON：`{ids:["id1"], embeddings:[[0.1,...]], metadatas:[{...}]}` / `{query_embeddings:[[...]], n_results:5, include:["metadatas","documents","distances"]}` / `{ids:["id1"]}`
+
 ## License
 
 MIT
