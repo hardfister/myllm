@@ -338,9 +338,133 @@ Session ──N:1── Rag
 | 侧栏刷新历史列表 | 0.5 ms | ~30 ms（1 次 MySQL + count） |
 | 打开历史会话 | 0.5 ms | ~40 ms（2 次 MySQL） |
 
-### 未使用前缀哈希的原因
+## Redis 数据流详解
 
-当前缓存 Key 采用 Spring Cache 默认的 `SimpleKey` 生成器，**未启用自定义 Key 前缀**。原因：
+### 整体架构
+
+```
+前端请求 → Controller → Service(@Cacheable/@CacheEvict) → Redis → MySQL
+                         ↕                               ↕
+                    内存操作写成功                     异步线程异步持久化
+```
+
+Redis 是 **读缓存 + 写穿透** 模式：所有读优先走 Redis，所有写直接落 MySQL 同时失效对应缓存 Key。
+
+### Key 结构
+
+| Key | 类型 | 内容 | 存活 |
+|-----|------|------|------|
+| `model_list::SimpleKey []` | JSON 数组 | `List<ModelConfig>` | 5 min |
+| `memory_list::SimpleKey []` | JSON 数组 | `List<MemoryConfig>` | 5 min |
+| `rag_list::SimpleKey []` | JSON 数组 | `List<Rag>` | 5 min |
+| `rag_search::SimpleKey []` | JSON 数组 | `List<Map>` 向量搜索结果 | 5 min |
+| `history_sessions::SimpleKey []` | JSON 数组 | `List<Map>` 历史会话列表 | 30 s |
+| `session_msgs::{sessionId}` | JSON 数组 | `List<Map>` 单会话全部消息 | 30 min |
+
+### 读流程（以模型列表为例）
+
+```
+GET /api/models
+  │
+  ▼
+ModelController.getAllModels()
+  │
+  ▼
+ModelConfigService.getAllModels()          ◄── @Cacheable(value = "model_list", unless = "#result.isEmpty()")
+  │
+  ├── Redis EXISTS "model_list::SimpleKey []"?
+  │     │
+  │     ├── YES (命中) ──→ 反序列化 JSON ──→ 返回 (0.5 ms)
+  │     │
+  │     └── NO  (未命中) ──→ modelConfigRepo.findAll() ──→ MySQL SELECT (50 ms)
+  │                                    │
+  │                                    ▼
+  │                           序列化为 JSON ──→ Redis SET "model_list::SimpleKey []" (TTL 5 min)
+  │                                    │
+  │                                    ▼
+  │                              返回数据给前端
+  ▼
+前端渲染列表
+```
+
+### 写操作的三阶段（以新建模型为例）
+
+```
+POST /api/models  { modelName: "GPT-4o", ... }
+  │
+  ▼
+ModelController.createModel()
+  │
+  ▼
+ModelConfigService.createModel()          ◄── @CacheEvict(value = "model_list", allEntries = true)
+  │
+  ├── [1] modelConfigRepo.save(model)    ◄── MySQL INSERT
+  │         ↓
+  │    数据已落盘，事务提交
+  │
+  ├── [2] Spring AOP 拦截方法返回
+  │         ↓
+  │    Redis DEL "model_list::SimpleKey []"    ◄── 缓存失效
+  │
+  └── [3] @CacheEvict 是方法返回后执行的（@AfterReturning advice）
+            ↓
+        MySQL 已写入成功，Redis 已清空旧缓存
+            ↓
+       下次 GET /api/models → 缓存未命中 → 从 MySQL 重新加载 → 写入新缓存
+```
+
+**为什么是 `@CacheEvict` 而不是 `@CachePut`**：`@CachePut` 会立即覆盖缓存但异步持久化可能还未落盘。`@CacheEvict` 删掉旧缓存，靠下一次读请求自然重建，保证缓存与 MySQL 最终一致。
+
+### 聊天流程中的缓存交互
+
+```
+POST /api/chat  { content: "你好" }
+  │
+  ├── 1. 加载配置（读缓存）
+  │      ModelConfigService.getAllModels()      → Redis GET "model_list"      (0.5 ms 或 50 ms)
+  │      MemoryConfigService.getAllMemories()   → Redis GET "memory_list"     (0.5 ms 或 30 ms)
+  │      RagService.getAllRags()                → Redis GET "rag_list"        (0.5 ms 或 30 ms)
+  │      ChatService.listSessions()             → Redis GET "history_sessions"(0.5 ms 或 30 ms)
+  │
+  ├── 2. 调 LLM（不经过 Redis）
+  │      LangChain4j → DeepSeek API → 60-120 秒
+  │
+  ├── 3. 异步持久化（主动清缓存）
+  │      new Thread(() -> {
+  │          SessionPersistenceService.saveSessionAndMessage()
+  │              → MySQL INSERT Session + Message       @CacheEvict("history_sessions", "session_msgs")
+  │              → Redis DEL "history_sessions" + "session_msgs:*"
+  │      }).start()
+  │
+  └── 4. 返回聊天回复给前端（不等异步线程）
+```
+
+### 缓存一致性保证
+
+```
+场景：用户在 A 窗口新建模型，B 窗口同时查看模型列表
+─────────────────────────────────────────────────────
+时间线：
+  T0: A 提交 POST /api/models → MySQL INSERT 成功
+  T1: @CacheEvict → Redis DEL "model_list"
+  T2: B 刷新 GET /api/models  →  Redis 未命中 → MySQL SELECT → 包含新模型
+  T3: Redis 写入新缓存
+
+结果：B 在 T2 就能看到 A 的变更（最多延迟一次 MySQL 查询 ≈ 50ms）
+```
+
+```
+场景：后端重启，MySQL 有数据，Redis 为空
+─────────────────────────────────────────────
+  T0: Spring Boot 启动 → Redis 连接成功
+  T1: 用户访问 GET /api/models
+  T2: @Cacheable → Redis miss → MySQL SELECT → 返回数据 ✅
+  T3: Redis 写入缓存
+
+结果：零冷启动问题。重启后第一次请求稍慢（50ms），后续全部命中 Redis。
+```
+
+### 未使用前缀哈希的原因
 
 1. **列表类缓存**（`model_list`, `memory_list`, `rag_list`）返回完整列表，Spring Cache 按方法名+参数生成 Key。参数为空 → Key 始终为 `cacheName::SimpleKey []`，天然去重。
 2. **RAG 搜索缓存**（`rag_search`）当前没有按 query 分片，同一个 Key 会被不同 query 覆盖。这是有意为之——避免向量检索结果在 Redis 中无限膨胀（Chroma 本身已提供检索加速）。
