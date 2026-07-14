@@ -212,17 +212,22 @@ public class RagService {
 
             RagErrorDetail.ChunkLog clog = new RagErrorDetail.ChunkLog(i, cs);
             try {
+                System.out.println("[RAG] 切片 " + i + "/" + chunks.size()
+                        + " (长度=" + chunk.length() + ") 开始向量化...");
                 float[] vector = embedWithModel(chunk, embModel);
                 if (vector != null && vector.length > 0) {
+                    System.out.println("[RAG] 切片 " + i + " 向量化成功 (维数=" + vector.length + "), 写入 Chroma...");
                     chromaUpsert(collName, "rag_" + ragId + "_chunk_" + i, vector,
                             Map.of("source", rag.getFilename(), "chunk_index", i,
                                    "rag_id", ragId, "text", chunk));
                     successCount++;
                     clog.success = true;
                 } else {
+                    System.err.println("[RAG] 切片 " + i + " 向量化失败: embedding 返回空/null");
                     clog.error = "embedding 返回空/null";
                 }
             } catch (Exception e) {
+                System.err.println("[RAG] 切片 " + i + " 向量化异常: " + e.getMessage());
                 clog.error = e.getMessage();
             }
             chunkLogs.add(clog);
@@ -453,21 +458,23 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            // Chroma v2: POST /api/v2/collections/{name}/add
+            // Chroma v2 正确格式: POST /api/v2/collections/{name}/upsert
+            List<Float> embList = new ArrayList<>(vector.length);
+            for (float v : vector) embList.add(v);
             String body = mapper.writeValueAsString(Map.of(
                     "ids", List.of(id),
-                    "embeddings", List.of(convertVectorToList(vector)),
+                    "embeddings", List.of(embList),
                     "metadatas", List.of(metadata)));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/add"))
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/upsert"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() >= 300) {
-                System.err.println("[Chroma] upsert 失败 HTTP " + resp.statusCode()
-                        + " coll=" + collName + " id=" + id
-                        + " body=" + resp.body().substring(0, Math.min(200, resp.body().length())));
+            int code = resp.statusCode();
+            if (code >= 400) {
+                System.err.println("[Chroma] upsert 失败 HTTP " + code
+                        + " → " + resp.body().substring(0, Math.min(300, resp.body().length())));
             }
         } catch (Exception e) {
             System.err.println("[Chroma] upsert 异常 coll=" + collName + " id=" + id + ": " + e.getMessage());
