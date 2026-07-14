@@ -309,10 +309,12 @@ public class RagService {
         String collName = userCollection(userId);
         ensureCollection(collName);
         try {
+            // Chroma v2: POST /get 需要显式声明 include 才会返回 metadatas
+            String reqBody = mapper.writeValueAsString(Map.of("include", List.of("metadatas")));
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/get"))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                    .POST(HttpRequest.BodyPublishers.ofString(reqBody))
                     .timeout(Duration.ofSeconds(10)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
@@ -451,16 +453,31 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            Map<String, Object> record = new LinkedHashMap<>();
-            record.put("id", id); record.put("vector", vector); record.put("metadata", metadata);
-            String body = mapper.writeValueAsString(Map.of("documents", List.of(record)));
+            // Chroma v2 API 正确格式：ids, embeddings, metadatas 三个独立数组
+            String body = mapper.writeValueAsString(Map.of(
+                    "ids", List.of(id),
+                    "embeddings", List.of(convertVectorToList(vector)),
+                    "metadatas", List.of(metadata)));
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/documents"))
                     .header("Content-Type", "application/json")
                     .method("POST", HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build();
-            http.send(req, HttpResponse.BodyHandlers.ofString());
-        } catch (Exception ignored) {}
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200 && resp.statusCode() != 201) {
+                System.err.println("[Chroma] upsert 失败 HTTP " + resp.statusCode()
+                        + " coll=" + collName + " id=" + id);
+            }
+        } catch (Exception e) {
+            System.err.println("[Chroma] upsert 异常 coll=" + collName + " id=" + id + ": " + e.getMessage());
+        }
+    }
+
+    /** float[] → List<Float> 用于 JSON 序列化 */
+    private static List<Float> convertVectorToList(float[] vec) {
+        List<Float> list = new ArrayList<>(vec.length);
+        for (float v : vec) list.add(v);
+        return list;
     }
 
     private List<Map<String, Object>> chromaQuery(String collName, float[] vector, int topK) {

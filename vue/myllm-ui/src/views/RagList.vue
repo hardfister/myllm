@@ -18,7 +18,7 @@ import { saveRags, loadRags } from '../services/localStorage'
 import { useAuth } from '../services/auth'
 import type { Rag, ModelConfig } from '../api'
 
-const { isLoggedIn, isOffline } = useAuth()
+const { isLoggedIn, isOffline, user } = useAuth()
 const emit = defineEmits(['updateColor'])
 
 // ===== 文档列表 =====
@@ -51,7 +51,7 @@ const vectorsLoading = ref(false)
 
 const loadVectors = async () => {
   vectorsLoading.value = true
-  try { const r = await listVectors(); vectors.value = r.data }
+  try { const r = await listVectors(user.value?.userId); vectors.value = r.data }
   catch { vectors.value = [] }
   finally { vectorsLoading.value = false; showVectors.value = true }
 }
