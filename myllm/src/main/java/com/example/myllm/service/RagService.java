@@ -36,6 +36,7 @@ public class RagService {
             .connectTimeout(Duration.ofSeconds(10)).build();
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
+    private static final String CHROMA_V2_PREFIX = "/api/v2/tenants/default_tenant/databases/default_database";
     private static final String COLLECTION_PREFIX = "myllm_rag_";
     private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
 
@@ -50,25 +51,26 @@ public class RagService {
         return userId != null ? COLLECTION_PREFIX + userId : DEFAULT_COLLECTION;
     }
 
+    private String chromaPath(String suffix) {
+        return CHROMA_URL + CHROMA_V2_PREFIX + suffix;
+    }
+
     private void ensureCollection(String collectionName) {
+        String path = chromaPath("/collections/" + collectionName);
         try {
-            HttpRequest get = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collectionName))
-                    .GET().build();
-            HttpResponse<String> resp = http.send(get, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) {
-                System.out.println("[Chroma] " + collectionName + " 已存在");
-                return;
-            }
+            HttpResponse<String> resp = http.send(
+                HttpRequest.newBuilder().uri(URI.create(path)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) { System.out.println("[Chroma] " + collectionName + " 已存在"); return; }
         } catch (Exception ignored) {}
         try {
             String body = mapper.writeValueAsString(Map.of("name", collectionName));
-            HttpRequest post = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(10)).build();
-            http.send(post, HttpResponse.BodyHandlers.ofString());
+            http.send(HttpRequest.newBuilder()
+                .uri(URI.create(chromaPath("/collections")))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10)).build(),
+                HttpResponse.BodyHandlers.ofString());
             System.out.println("[Chroma] " + collectionName + " 已创建");
         } catch (Exception e) {
             System.err.println("[Chroma] 创建 " + collectionName + " 失败: " + e.getMessage());
@@ -317,7 +319,7 @@ public class RagService {
             // Chroma v2: POST /get 需要显式声明 include 才会返回 metadatas
             String reqBody = mapper.writeValueAsString(Map.of("include", List.of("metadatas")));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/get"))
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/get")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(reqBody))
                     .timeout(Duration.ofSeconds(10)).build();
@@ -458,23 +460,23 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            // Chroma v2 正确格式: POST /api/v2/collections/{name}/upsert
+            // Chroma v2: POST /collections/{name}/upsert
             List<Float> embList = new ArrayList<>(vector.length);
             for (float v : vector) embList.add(v);
             String body = mapper.writeValueAsString(Map.of(
                     "ids", List.of(id),
                     "embeddings", List.of(embList),
                     "metadatas", List.of(metadata)));
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/upsert"))
+            HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/upsert")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(10)).build();
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+                    .timeout(Duration.ofSeconds(10)).build(),
+                    HttpResponse.BodyHandlers.ofString());
             int code = resp.statusCode();
+            System.out.println("[Chroma] upsert " + collName + "/" + id + " → HTTP " + code);
             if (code >= 400) {
-                System.err.println("[Chroma] upsert 失败 HTTP " + code
-                        + " → " + resp.body().substring(0, Math.min(300, resp.body().length())));
+                System.err.println("[Chroma] " + resp.body().substring(0, Math.min(300, resp.body().length())));
             }
         } catch (Exception e) {
             System.err.println("[Chroma] upsert 异常 coll=" + collName + " id=" + id + ": " + e.getMessage());
@@ -494,7 +496,7 @@ public class RagService {
                     "query_embeddings", List.of(vector), "n_results", topK,
                     "include", List.of("metadatas", "documents", "distances")));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/query"))
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/query")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(15)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
@@ -526,7 +528,7 @@ public class RagService {
     private void chromaDelete(String collName, String id) {
         try {
             http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/documents/" + id))
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/documents/" + id)))
                     .DELETE().timeout(Duration.ofSeconds(5)).build(),
                     HttpResponse.BodyHandlers.ofString());
         } catch (Exception ignored) {}
