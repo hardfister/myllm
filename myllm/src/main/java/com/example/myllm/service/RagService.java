@@ -36,13 +36,31 @@ public class RagService {
             .connectTimeout(Duration.ofSeconds(10)).build();
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
-    private static final String CHROMA_V2_PREFIX = "/api/v2/tenants/default_tenant/databases/default_database";
+    private static final String CHROMA_V2_PREFIX = "/api/v2";
     private static final String COLLECTION_PREFIX = "myllm_rag_";
     private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
 
     public RagService(RagRepository ragRepository, ModelConfigRepository modelConfigRepo) {
         this.ragRepository = ragRepository;
         this.modelConfigRepo = modelConfigRepo;
+        // 启动时诊断 Chroma 连接
+        new Thread(() -> {
+            try {
+                Thread.sleep(3000);
+                String testColl = DEFAULT_COLLECTION;
+                ensureCollection(testColl);
+                // 尝试写一条测试向量然后立即删掉
+                float[] dummy = new float[]{0.1f, 0.2f, 0.3f};
+                System.out.println("[Chroma DIAG] 尝试写入测试向量...");
+                chromaUpsert(testColl, "__test__", dummy,
+                        Map.of("test", true, "timestamp", System.currentTimeMillis()));
+                Thread.sleep(500);
+                chromaDelete(testColl, "__test__");
+                System.out.println("[Chroma DIAG] ✅ 读写测试通过 — 端点格式正确");
+            } catch (Exception e) {
+                System.err.println("[Chroma DIAG] ❌ 读写测试失败: " + e.getMessage());
+            }
+        }, "chroma-diag").start();
     }
 
     // ===================== 每个用户的独立 Chroma Collection =====================
