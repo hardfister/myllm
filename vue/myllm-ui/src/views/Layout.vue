@@ -212,9 +212,15 @@ const handleDeleteSession = async (dbId: number) => {
 }
 
 // ===== ⋯ 菜单切换 =====
+const editingSession = ref<HistorySession | null>(null)
 const toggleMenu = (dbId: number, event: Event) => {
   event.stopPropagation()
   openMenuId.value = openMenuId.value === dbId ? null : dbId
+  if (openMenuId.value !== null) {
+    const s = historySessions.value.find(h => h.id === dbId)
+    editingSession.value = s || null
+    renameText.value = s ? s.title : ''
+  }
 }
 
 // 点击其他地方关闭 ⋯ 菜单
@@ -472,12 +478,12 @@ const handleClearAll = () => {
         <div class="session-edit-box">
           <h4>编辑会话</h4>
           <input v-model="renameText" class="styled-input" placeholder="输入新名称..."
-            @keyup.enter="doRename(historySessions.find(s => s.id === openMenuId)!)"
+            @keyup.enter="doRename(editingSession!)"
             style="width:100%;box-sizing:border-box;margin:12px 0;" />
           <div class="session-edit-btns">
-            <button class="popup-item" @click="doRename(historySessions.find(s => s.id === openMenuId)!)">✏️ 改名</button>
-            <button class="popup-item" @click="doAiTitle(historySessions.find(s => s.id === openMenuId)!)">🤖 AI起名</button>
-            <button class="popup-item danger" @click="confirmDeleteSession(historySessions.find(s => s.id === openMenuId)!)">🗑 删除</button>
+            <button class="popup-item" @click="doRename(editingSession!)">✏️ 改名</button>
+            <button class="popup-item" @click="doAiTitle(editingSession!)">🤖 AI起名</button>
+            <button class="popup-item danger" @click="confirmDeleteSession(editingSession!)">🗑 删除</button>
           </div>
           <button class="close-btn" style="margin-top:8px;width:100%;" @click="openMenuId = null">取消</button>
         </div>
