@@ -439,7 +439,24 @@ public class RagService {
     }
 
     private ModelConfig findEmbeddingModel() {
+        // 优先用已完成向量化的文档关联的嵌入模型
+        List<Rag> all = ragRepository.findAll();
+        for (Rag r : all) {
+            if (r.getEmbeddingModelId() != null && "completed".equals(r.getStatus())) {
+                return modelConfigRepo.findById(r.getEmbeddingModelId()).orElse(null);
+            }
+        }
+        // 兜底：找第一个模型名含 embed 的配置
         List<ModelConfig> models = modelConfigRepo.findAll();
+        for (ModelConfig m : models) {
+            String name = m.getModelName() != null ? m.getModelName().toLowerCase() : "";
+            String display = m.getDisplayName() != null ? m.getDisplayName().toLowerCase() : "";
+            if (name.contains("embed") || display.contains("embed") || display.contains("嵌入")
+                    || name.equals("text-embedding-3-small") || name.equals("nomic-embed-text")) {
+                return m;
+            }
+        }
+        // 最后兜底：任意有 apiKey 的模型
         for (ModelConfig m : models) {
             if (m.getApiKeyEncrypted() != null && !m.getApiKeyEncrypted().isBlank()) return m;
         }
