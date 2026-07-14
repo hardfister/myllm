@@ -21,6 +21,14 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+// FormData 请求自动删除 Content-Type，让浏览器设置正确的 multipart boundary
+api.interceptors.request.use(config => {
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type']
+  }
+  return config
+})
+
 // ==================== 请求拦截器：自动注入 JWT ====================
 
 api.interceptors.request.use(config => {
