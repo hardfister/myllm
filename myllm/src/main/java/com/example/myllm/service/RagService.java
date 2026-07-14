@@ -453,20 +453,21 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            // Chroma v2 API 正确格式：ids, embeddings, metadatas 三个独立数组
+            // Chroma v2: POST /api/v2/collections/{name}/add
             String body = mapper.writeValueAsString(Map.of(
                     "ids", List.of(id),
                     "embeddings", List.of(convertVectorToList(vector)),
                     "metadatas", List.of(metadata)));
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/documents"))
+                    .uri(URI.create(CHROMA_URL + "/api/v2/collections/" + collName + "/add"))
                     .header("Content-Type", "application/json")
-                    .method("POST", HttpRequest.BodyPublishers.ofString(body))
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200 && resp.statusCode() != 201) {
+            if (resp.statusCode() >= 300) {
                 System.err.println("[Chroma] upsert 失败 HTTP " + resp.statusCode()
-                        + " coll=" + collName + " id=" + id);
+                        + " coll=" + collName + " id=" + id
+                        + " body=" + resp.body().substring(0, Math.min(200, resp.body().length())));
             }
         } catch (Exception e) {
             System.err.println("[Chroma] upsert 异常 coll=" + collName + " id=" + id + ": " + e.getMessage());

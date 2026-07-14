@@ -33,8 +33,8 @@ watch(provider, (name) => {
 
 const famousModels = [
   'deepseek-v4-flash', 'deepseek-v4-pro[1m]', 'GPT-5.1', 'GPT-5.2',
-  'Claude-4.6-Sonnet', 'Claude-4.7-Opus', 'Claude-4.8-Opus', 'Gemini-3.5-flash',
-  'Gemini-3.1-pro', 'Llama-3-70B', 'Mistral-Large', 'Qwen-3.5-72B'
+  'Claude-4.6-Sonnet', 'Claude-4.7-Opus', 'Claude-4.8-Opus', 'Gemini-3.5-flash','text-embedding-v1','text-embedding-v3',
+  'Gemini-3.1-pro', 'Llama-3-70B', 'Mistral-Large', 'Qwen-3.5-72B','qwen3-vl-embedding','multimodal-embedding-v1'
 ]
 
 const openModelPicker = () => { showPickerModal.value = true }
