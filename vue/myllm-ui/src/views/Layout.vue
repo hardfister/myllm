@@ -171,28 +171,29 @@ const sendMessage = () => {
 // ===== 历史会话操作 =====
 const renameText = ref('')
 
-const doRename = async (item: HistorySession) => {
+const doRename = (item?: HistorySession) => {
+  if (!item) return
   const newTitle = renameText.value.trim()
   if (!newTitle) return
-  try {
-    await renameSession(item.sessionId, newTitle)
+  renameSession(item.sessionId, newTitle).then(() => {
     item.title = newTitle
     renameText.value = ''
     openMenuId.value = null
-  } catch (e) { console.error('改名失败:', e) }
+  }).catch(e => console.error('改名失败:', e))
 }
 
-const doAiTitle = async (item: HistorySession) => {
-  try {
-    const res = await generateAiTitle(item.sessionId)
+const doAiTitle = (item?: HistorySession) => {
+  if (!item) return
+  generateAiTitle(item.sessionId).then(res => {
     item.title = res.data.title
     renameText.value = ''
     openMenuId.value = null
-  } catch (e) { console.error('AI起名失败:', e); alert('AI起名失败') }
+  }).catch(e => { console.error('AI起名失败:', e); alert('AI起名失败') })
 }
 
-const confirmDeleteSession = (item: HistorySession) => {
-  if (!confirm(`确定要删除会话「${item.title}」吗？\n\n此操作不可撤销，将同时删除该会话下的全部消息。`)) return
+const confirmDeleteSession = (item?: HistorySession) => {
+  if (!item) return
+  if (!confirm(`确定要删除会话「${item.title}」吗？\n\n此操作不可撤销。`)) return
   openMenuId.value = null
   handleDeleteSession(item.id)
 }
@@ -350,14 +351,6 @@ const handleClearAll = () => {
               </div>
               <div class="history-menu-wrapper" @click.stop>
                 <button class="history-menu-btn" @click.stop="toggleMenu(item.id, $event)" title="更多操作">⋯</button>
-                <div v-if="openMenuId === item.id" class="history-popup">
-                  <input v-model="renameText" class="popup-input" placeholder="新名称..." @keyup.enter="doRename(item)" />
-                  <div class="popup-btns">
-                    <button class="popup-item" @click.stop="doRename(item)">✏️ 改名</button>
-                    <button class="popup-item" @click.stop="doAiTitle(item)">🤖 AI起名</button>
-                    <button class="popup-item danger" @click.stop="confirmDeleteSession(item)">🗑 删除</button>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -472,6 +465,25 @@ const handleClearAll = () => {
 
     <!-- 弹窗 -->
     <LoginModal v-if="showLoginModal" @close="showLoginModal = false" @login-success="onLoginSuccess" />
+
+    <!-- 会话编辑弹窗（居中） -->
+    <Teleport to="body">
+      <div v-if="openMenuId !== null" class="login-overlay" @click.self="openMenuId = null">
+        <div class="session-edit-box">
+          <h4>编辑会话</h4>
+          <input v-model="renameText" class="styled-input" placeholder="输入新名称..."
+            @keyup.enter="doRename(historySessions.find(s => s.id === openMenuId)!)"
+            style="width:100%;box-sizing:border-box;margin:12px 0;" />
+          <div class="session-edit-btns">
+            <button class="popup-item" @click="doRename(historySessions.find(s => s.id === openMenuId)!)">✏️ 改名</button>
+            <button class="popup-item" @click="doAiTitle(historySessions.find(s => s.id === openMenuId)!)">🤖 AI起名</button>
+            <button class="popup-item danger" @click="confirmDeleteSession(historySessions.find(s => s.id === openMenuId)!)">🗑 删除</button>
+          </div>
+          <button class="close-btn" style="margin-top:8px;width:100%;" @click="openMenuId = null">取消</button>
+        </div>
+      </div>
+    </Teleport>
+
     <Teleport to="body">
       <div v-if="showProfileModal" class="login-overlay" @click.self="showProfileModal = false">
         <div class="login-box">
@@ -593,6 +605,17 @@ const handleClearAll = () => {
 .popup-item:hover { background: rgba(0,0,0,0.08); }
 .popup-item.danger { color: #dc2626; }
 .popup-item.danger:hover { background: rgba(220,38,38,0.1); }
+
+/* 居中会话编辑弹窗 */
+.session-edit-box {
+  width: 320px; padding: 24px; border-radius: 16px;
+  background: rgba(255,255,255,0.94); border: 1px solid rgba(255,255,255,0.6);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.15);
+  backdrop-filter: blur(10px);
+}
+.session-edit-box h4 { margin: 0 0 4px; font-size: 16px; color: #1e293b; }
+.session-edit-btns { display: flex; gap: 8px; }
+.session-edit-btns .popup-item { flex: 1; text-align: center; padding: 8px 12px; font-size: 13px; }
 
 .history-empty { padding: 12px 20px; text-align: center; }
 
