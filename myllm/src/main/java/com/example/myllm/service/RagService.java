@@ -37,7 +37,7 @@ public class RagService {
             .connectTimeout(Duration.ofSeconds(10)).build();
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
-    private static final String CHROMA_API = "/api/v2";
+    private static final String CHROMA_API = "/api/v2/tenants/default_tenant/databases/default_database";
     private static final String DEFAULT_COLLECTION = "myllm_rag_guest";
 
     /** 缓存 collectionName → UUID */
@@ -499,18 +499,19 @@ public class RagService {
                     "ids", List.of(id),
                     "embeddings", List.of(embList),
                     "metadatas", List.of(metadata)));
+            String url = chromaPath("/collections/" + uuid + "/upsert");
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + uuid + "/add")))
+                    .uri(URI.create(url))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build(),
                     HttpResponse.BodyHandlers.ofString());
-            System.out.println("[Chroma] add " + uuid + "/" + id + " → HTTP " + resp.statusCode());
+            System.out.println("[Chroma] upsert " + uuid.substring(0,8) + "/" + id + " → " + resp.statusCode());
             if (resp.statusCode() >= 400) {
-                System.err.println("[Chroma] " + resp.body().substring(0, Math.min(300, resp.body().length())));
+                System.err.println("[Chroma] " + url + "\n  " + resp.body().substring(0, Math.min(300, resp.body().length())));
             }
         } catch (Exception e) {
-            System.err.println("[Chroma] upsert 异常: " + e.getMessage());
+            System.err.println("[Chroma] upsert异常: " + e.getMessage());
         }
     }
 
