@@ -66,7 +66,8 @@ public class RagService {
     // ===================== 每个用户的独立 Chroma Collection =====================
 
     private String userCollection(Long userId) {
-        return userId != null ? COLLECTION_PREFIX + userId : DEFAULT_COLLECTION;
+        // 统一使用单个集合，简化管理
+        return DEFAULT_COLLECTION;
     }
 
     private String chromaPath(String suffix) {
@@ -331,7 +332,8 @@ public class RagService {
 
     /** 获取当前用户 Chroma 集合中所有向量（分页） */
     public List<Map<String, Object>> listVectors(Long userId) {
-        String collName = userCollection(userId);
+        String collName = DEFAULT_COLLECTION;
+        System.out.println("[Chroma] listVectors userId=" + userId + " coll=" + collName);
         ensureCollection(collName);
         try {
             // Chroma v2: POST /get 需要显式声明 include 才会返回 metadatas
@@ -342,8 +344,11 @@ public class RagService {
                     .POST(HttpRequest.BodyPublishers.ofString(reqBody))
                     .timeout(Duration.ofSeconds(10)).build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            String body = resp.body();
+            System.out.println("[Chroma] /get 返回 HTTP " + resp.statusCode() + " body长度=" + body.length());
+            if (body.length() > 0) System.out.println("[Chroma] /get body预览: " + body.substring(0, Math.min(500, body.length())));
             if (resp.statusCode() == 200) {
-                JsonNode root = mapper.readTree(resp.body());
+                JsonNode root = mapper.readTree(body);
                 JsonNode ids = root.get("ids");
                 JsonNode metas = root.get("metadatas");
                 List<Map<String, Object>> result = new ArrayList<>();
@@ -396,23 +401,10 @@ public class RagService {
             float[] queryVec = embedWithModel(query, embModel);
             if (queryVec == null) return List.of();
 
-            // 跨所有用户的 collection 搜索。遍历已知的 collection。
-            // 优化：从已启用的 Rag 文档中找出它们所属的用户 → 集合
-            Set<String> collections = new HashSet<>();
-            List<Rag> all = ragRepository.findAll();
-            for (Rag r : all) {
-                if (r.getIsEnabled() != null && r.getIsEnabled() == 1) {
-                    collections.add(userCollection(r.getUserId()));
-                }
-            }
-            if (collections.isEmpty()) collections.add(DEFAULT_COLLECTION);
-
-            List<Map<String, Object>> allResults = new ArrayList<>();
-            for (String coll : collections) {
-                ensureCollection(coll);
-                allResults.addAll(chromaQuery(coll, queryVec, topK));
-            }
-            return allResults.stream()
+            // 统一使用默认集合检索
+            String collName = DEFAULT_COLLECTION;
+            ensureCollection(collName);
+            return chromaQuery(collName, queryVec, topK).stream()
                     .filter(r -> r.get("content") != null)
                     .filter(r -> {
                         Object ragIdObj = r.get("ragId");
