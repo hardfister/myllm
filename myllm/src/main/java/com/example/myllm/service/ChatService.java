@@ -528,6 +528,7 @@ public class ChatService {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toSet());
             List<Map<String, Object>> ragResults = ragService.searchRelevant(query, 5, enabledRagIds);
+            System.out.println("[RAG] searchRelevant 返回 " + ragResults.size() + " 条结果");
             if (!ragResults.isEmpty()) {
                 sources.addAll(ragResults.stream()
                         .map(r -> (String) r.get("source")).distinct().collect(Collectors.toList()));
@@ -539,10 +540,26 @@ public class ChatService {
                               .append(", 相似度: ").append(String.format("%.2f", item.get("similarity")))
                               .append(") ---\n").append(item.get("content")).append("\n\n");
                 }
+            } else {
+                // 向量检索无结果 → 直接注入已启用文档的全部内容
+                System.out.println("[RAG] 向量检索无结果, 注入全部已启用文档全文");
+                for (Rag rag : enabledRags) {
+                    if (rag.getStatus() != null && rag.getStatus().equals("completed") && rag.getContent() != null) {
+                        sources.add(rag.getFilename());
+                        String snippet = rag.getContent().length() > 3000 ? rag.getContent().substring(0, 3000) + "..." : rag.getContent();
+                        ragContext.append("【").append(rag.getFilename()).append("】\n").append(snippet).append("\n\n");
+                    }
+                }
             }
         } catch (Exception e) {
-            System.err.println("[RAG] 检索异常, 回退: " + e.getMessage());
-            sources.addAll(enabledRags.stream().map(Rag::getFilename).collect(Collectors.toList()));
+            System.err.println("[RAG] 检索异常, 回退全文: " + e.getMessage());
+            System.out.println("[RAG] 向量检索异常, 注入全文作为备用:");
+            for (Rag rag : enabledRags) {
+                if (rag.getContent() != null) {
+                    sources.add(rag.getFilename());
+                    System.out.println("[RAG] 文档=" + rag.getFilename() + " 状态=" + rag.getStatus() + " 切片=" + rag.getChunkCount());
+                }
+            }
             for (Rag rag : enabledRags) {
                 if (rag.getContent() != null && !rag.getContent().isBlank()) {
                     String snip = rag.getContent().length() > 2000 ? rag.getContent().substring(0, 2000) + "..." : rag.getContent();
