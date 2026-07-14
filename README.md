@@ -90,7 +90,7 @@ mysql -u root -p < docs/myllm_db.sql
 
 ### 2. 配置后端
 
-编辑 [application.yml](E:/document/1myweb/myllm/src/main/resources/application.yml)：
+编辑 `myllm/src/main/resources/application.yml`：
 
 ```yaml
 spring:
@@ -216,13 +216,13 @@ npm run dev
 
 ## 安全说明
 
-当前 [SecurityConfig.java](E:/document/1myweb/myllm/src/main/java/com/example/myllm/config/SecurityConfig.java) 中，`/api/models/**`、`/api/rags/**`、`/api/memories/**`、`/api/sync/**`、`/api/sessions/**` 均为 `permitAll()`。JWT 过滤器仍会在请求带 token 时解析用户身份，但这些业务接口当前不是强制认证。
+当前 `SecurityConfig.java` 中，`/api/models/**`、`/api/rags/**`、`/api/memories/**`、`/api/sync/**`、`/api/sessions/**` 均为 `permitAll()`。JWT 过滤器仍会在请求带 token 时解析用户身份，但这些业务接口当前不是强制认证。
 
 这是为了兼容前端的在线/离线双模式和本地调试。若要生产使用，应把配置类中的授权规则收紧，并在各 Service 中按当前用户隔离数据。
 
 ## 数据库设计
 
-[docs/myllm_db.sql](E:/document/1myweb/docs/myllm_db.sql) 与当前 JPA 实体保持一致。
+`docs/myllm_db.sql` 与当前 JPA 实体保持一致。
 
 ```text
 User ──1:N── ModelConfig
