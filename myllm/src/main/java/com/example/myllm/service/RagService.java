@@ -45,7 +45,7 @@ public class RagService {
 
     private static final String CHROMA_URL = "http://127.0.0.1:8000";
     private static final String COLLECTION_NAME = "my_knowledge_base";
-    private static final String UPLOAD_DIR = "./uploads/";
+    /** 上传目录：项目根目录下的 uploads/ */
 
     public RagService(RagRepository ragRepository,
                       ModelConfigRepository modelConfigRepo) {
@@ -69,13 +69,17 @@ public class RagService {
     @Transactional
     public Rag createRag(MultipartFile file, String collectionName,
                           Integer chunkSize, Integer chunkOverlap, String chunkMethod) throws IOException {
-        Path uploadPath = Paths.get(UPLOAD_DIR);
+        // 动态获取项目根目录，拼接 uploads 子目录（不写死路径，不依赖 Tomcat 临时目录）
+        Path uploadPath = Paths.get(System.getProperty("user.dir"), "uploads");
         if (!Files.exists(uploadPath)) Files.createDirectories(uploadPath);
+
         String originalFilename = file.getOriginalFilename();
         String stored = UUID.randomUUID().toString().substring(0, 8)
                 + "_" + (originalFilename != null ? originalFilename : "unknown");
         Path target = uploadPath.resolve(stored);
-        file.transferTo(target.toFile());
+
+        // 使用 Files.copy 替代 transferTo，彻底解决跨盘/临时目录转移失败问题
+        Files.copy(file.getInputStream(), target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
         String collName = (collectionName != null && !collectionName.isBlank())
                 ? collectionName : COLLECTION_NAME;
@@ -92,9 +96,10 @@ public class RagService {
         rag.setChunkSize(cs); rag.setChunkOverlap(co); rag.setChunkMethod(cm);
         rag.setChunkCount(0);
         rag.setContent(null);
-        rag.setStatus("uploaded");  // 仅保存，待后续切片+向量化
+        rag.setStatus("uploaded");
 
-        System.out.println("[RAG] 文件已保存: " + originalFilename + " (" + rag.getFileSize() + " bytes)");
+        System.out.println("[RAG] 文件已保存: " + originalFilename + " (" + rag.getFileSize() + " bytes)"
+                + " → " + target.toAbsolutePath());
         return ragRepository.save(rag);
     }
 
