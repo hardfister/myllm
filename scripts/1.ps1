@@ -47,20 +47,32 @@ if ($mysqlOk) {
     }
 }
 
-# ─── 2. Redis ───
+# ─── 2. Redis (WSL Alpine 优先，其次 Docker) ───
 Write-Host "[2/6] 检查 Redis..." -ForegroundColor Yellow
 $redisOk = $false
 try { $ping = redis-cli ping 2>$null; if ($ping -eq "PONG") { $redisOk = $true } } catch {}
 if ($redisOk) {
     Write-Host "  ✅ Redis 已在运行 (6379)" -ForegroundColor Green
 } else {
-    Write-Host "  ⏳ 尝试启动 Redis (Docker)..." -ForegroundColor Yellow
-    docker start myllm-redis 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine 2>$null
+    Write-Host "  ⏳ 尝试启动 Redis (WSL Alpine)..." -ForegroundColor Yellow
+    try {
+        wsl -d Alpine -- redis-server --daemonize yes 2>$null
+        Start-Sleep 2
+        $ping2 = redis-cli ping 2>$null
+        if ($ping2 -eq "PONG") {
+            Write-Host "  ✅ Redis 已通过 WSL Alpine 启动" -ForegroundColor Green
+            $redisOk = $true
+        }
+    } catch {}
+    if (-not $redisOk) {
+        Write-Host "  ⏳ WSL 失败，尝试 Docker..." -ForegroundColor Yellow
+        docker start myllm-redis 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine 2>$null
+        }
+        if ($LASTEXITCODE -eq 0) { Write-Host "  ✅ Redis 已启动 (Docker)" -ForegroundColor Green }
+        else { Write-Host "  ❌ Redis 启动失败" -ForegroundColor Red }
     }
-    if ($LASTEXITCODE -eq 0) { Write-Host "  ✅ Redis 已启动 (Docker)" -ForegroundColor Green }
-    else { Write-Host "  ❌ Redis 启动失败" -ForegroundColor Red }
 }
 
 # ─── 3. Chroma ───

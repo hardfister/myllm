@@ -9,24 +9,32 @@ echo   Spring Boot + Vue 3 + Chroma + Redis
 echo ============================================
 echo.
 
-:: ========== 1. 检查并启动 Redis ==========
+:: ========== 1. Redis (WSL Alpine 优先) ==========
 echo [1/5] 检查 Redis...
 redis-cli ping >nul 2>&1
 if %errorlevel% equ 0 (
-    echo   ✅ Redis 已在运行
+    echo   ✅ Redis 已在运行 (6379)
 ) else (
-    echo   ⏳ 尝试启动 Redis (Docker)...
-    docker start myllm-redis >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo   ⏳ 创建 Redis 容器...
-        docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine >nul 2>&1
+    echo   ⏳ 尝试启动 Redis (WSL Alpine)...
+    wsl -d Alpine -- redis-server --daemonize yes >nul 2>&1
+    timeout /t 2 /nobreak >nul
+    redis-cli ping >nul 2>&1
+    if %errorlevel% equ 0 (
+        echo   ✅ Redis 已通过 WSL Alpine 启动
+    ) else (
+        echo   ⏳ WSL 失败，尝试 Docker...
+        docker start myllm-redis >nul 2>&1
         if %errorlevel% neq 0 (
-            echo   ⚠️  Redis Docker 启动失败，请确认 Redis 已运行
+            echo   ⏳ 创建 Redis 容器...
+            docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine >nul 2>&1
+            if %errorlevel% neq 0 (
+                echo   ⚠️  Redis 启动失败
+            ) else (
+                echo   ✅ Redis 已启动 (Docker)
+            )
         ) else (
             echo   ✅ Redis 已启动 (Docker)
         )
-    ) else (
-        echo   ✅ Redis 已启动 (Docker)
     )
 )
 

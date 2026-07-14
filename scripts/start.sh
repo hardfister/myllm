@@ -12,10 +12,13 @@ echo "[1/5] 检查 Redis..."
 if redis-cli ping &>/dev/null; then
     echo "  ✅ Redis 已在运行"
 else
-    echo "  ⏳ 尝试启动 Redis (Docker)..."
-    docker start myllm-redis 2>/dev/null || \
-        docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine && \
-        echo "  ✅ Redis 已启动 (Docker)"
+    echo "  ⏳ 尝试启动 Redis..."
+    redis-server --daemonize yes 2>/dev/null && echo "  ✅ Redis 已启动" || {
+        echo "  本地启动失败，尝试 Docker..."
+        docker start myllm-redis 2>/dev/null || \
+            docker run -d --name myllm-redis -p 6379:6379 redis:7-alpine && \
+            echo "  ✅ Redis 已启动 (Docker)"
+    }
 fi
 
 # ---- 2. Chroma ----
