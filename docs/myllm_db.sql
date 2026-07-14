@@ -96,6 +96,7 @@ CREATE TABLE rag (
     description         VARCHAR(500),
     is_enabled          TINYINT(1)   DEFAULT 1,
     embedding_model_id  BIGINT,
+    error_detail        TEXT,
     created_at          DATETIME     DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_rag_user FOREIGN KEY (user_id) REFERENCES `user`(id) ON DELETE SET NULL,
