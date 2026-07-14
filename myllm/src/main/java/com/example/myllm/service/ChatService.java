@@ -557,16 +557,24 @@ public class ChatService {
                     .modelName(mc.getModelName() != null ? mc.getModelName() : "deepseek-chat")
                     .temperature(0.3).maxTokens(50).timeout(Duration.ofSeconds(30)).build();
 
-            String prompt = "请用不超过20个字简短总结以下对话的主题，只输出标题本身，不要引号，不要解释：\n\n" + content;
+            String prompt = "请用不超过15个字简短总结以下对话的主题，直接输出标题，不要引号、不要解释、不要前缀：\n\n" + content;
             String title = model.generate(prompt);
             if (title != null) {
-                title = title.trim().replaceAll("^[\"'「]|[\"'」]$", "");
+                title = title.trim().replaceAll("^[\"'「『]|[\"'」』]$", "").replaceAll("[\n\r]", "");
+                title = title.replaceAll("^(标题|主题|对话主题)[：:]\\s*", "");
                 if (title.length() > 30) title = title.substring(0, 30);
-                s.setTitle(title);
-                sessionRepo.save(s);
-                System.out.println("[AI标题] " + sessionId + " → " + title);
-                return title;
+                if (!title.isBlank()) {
+                    s.setTitle(title);
+                    sessionRepo.save(s);
+                    System.out.println("[AI标题] " + sessionId + " → " + title);
+                    return title;
+                }
             }
+            // 兜底：取第一条消息的前 20 字
+            String fallback = msgs.get(0).getUserMessage();
+            if (fallback.length() > 20) fallback = fallback.substring(0, 20) + "...";
+            System.out.println("[AI标题] " + sessionId + " AI返回空, 兜底 → " + fallback);
+            return fallback;
         } catch (Exception e) {
             System.err.println("[AI标题] 失败: " + e.getMessage());
         }

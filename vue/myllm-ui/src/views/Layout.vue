@@ -185,8 +185,13 @@ const doRename = (item?: HistorySession) => {
 const doAiTitle = (item?: HistorySession) => {
   if (!item) return
   generateAiTitle(item.sessionId).then(res => {
-    item.title = res.data.title
-    renameText.value = res.data.title   // 输入框立即显示 AI 给的标题
+    const t = res.data.title
+    if (t && t.trim()) {
+      item.title = t
+      renameText.value = t
+    } else {
+      alert('AI 返回了空标题，请手动输入')
+    }
   }).catch(e => { console.error('AI起名失败:', e); alert('AI起名失败') })
 }
 
