@@ -478,7 +478,7 @@ public class RagService {
 
     private void chromaUpsert(String collName, String id, float[] vector, Map<String, Object> metadata) {
         try {
-            // Chroma v2: POST /collections/{name}/upsert
+            // Chroma v2: POST /collections/{name}/add
             List<Float> embList = new ArrayList<>(vector.length);
             for (float v : vector) embList.add(v);
             String body = mapper.writeValueAsString(Map.of(
@@ -486,7 +486,7 @@ public class RagService {
                     "embeddings", List.of(embList),
                     "metadatas", List.of(metadata)));
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/upsert")))
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/add")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .timeout(Duration.ofSeconds(10)).build(),
@@ -545,9 +545,13 @@ public class RagService {
 
     private void chromaDelete(String collName, String id) {
         try {
+            // Chroma v2 删除: POST /collections/{name}/delete body={"ids":["..."]}
+            String body = mapper.writeValueAsString(Map.of("ids", List.of(id)));
             http.send(HttpRequest.newBuilder()
-                    .uri(URI.create(chromaPath("/collections/" + collName + "/documents/" + id)))
-                    .DELETE().timeout(Duration.ofSeconds(5)).build(),
+                    .uri(URI.create(chromaPath("/collections/" + collName + "/delete")))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .timeout(Duration.ofSeconds(5)).build(),
                     HttpResponse.BodyHandlers.ofString());
         } catch (Exception ignored) {}
     }
