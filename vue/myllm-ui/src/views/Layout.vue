@@ -186,8 +186,7 @@ const doAiTitle = (item?: HistorySession) => {
   if (!item) return
   generateAiTitle(item.sessionId).then(res => {
     item.title = res.data.title
-    renameText.value = ''
-    openMenuId.value = null
+    renameText.value = res.data.title   // 输入框立即显示 AI 给的标题
   }).catch(e => { console.error('AI起名失败:', e); alert('AI起名失败') })
 }
 
