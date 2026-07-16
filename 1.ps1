@@ -10,7 +10,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 # Step 1: Redis via Docker Desktop WSL (线性安全版)
 # ==========================================================
 Write-Host "[1/4] Redis (WSL)..." -ForegroundColor Yellow
-
+# redis-server --protected-mode no --bind 0.0.0.0
 # 不管三七二十一，直接让 WSL 在后台拉起 Redis。
 # 如果已经启动了，它会自动忽略；如果没启动，它会直接启动。
 wsl -d docker-desktop -u root -- redis-server --protected-mode no --bind 0.0.0.0 --daemonize yes 2>$null

@@ -11,6 +11,8 @@ import lombok.Data;
 public class ChatRequest {
     private String content;
     private String sessionId;
+    /** 全局 Prompt — 前端设置在模型列表顶部，注入每个模型 System Prompt 最前面 */
+    private String globalPrompt;
 
     public ChatRequest() {}
 }

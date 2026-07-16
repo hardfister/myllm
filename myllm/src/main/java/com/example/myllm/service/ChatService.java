@@ -82,7 +82,7 @@ public class ChatService {
      *
      * 回复格式中每条都标注 displayName（用户给模型取的名）。
      */
-    public ChatResponse chat(String userMessage, String sessionId) {
+    public ChatResponse chat(String userMessage, String sessionId, String globalPrompt) {
         // 1. 会话 ID
         boolean dbSessionExists = false;
         if (sessionId == null || sessionId.isBlank()) {
@@ -150,7 +150,7 @@ public class ChatService {
 
             // 构建 System Prompt: 模型自带 prompt + RAG + 多角色声明
             String systemPrompt = buildSystemPrompt(mc, ragContext.toString(),
-                    enabledModels);
+                    enabledModels, globalPrompt);
 
             System.out.println("[" + sessionId + "] → 调用「" + displayName
                     + "」(上下文长度: " + conversationLog.length() + " 字)");
@@ -322,7 +322,7 @@ public class ChatService {
      *    type: "start_model" / "token" / "end_model" / "done" / "error"
      *    data: displayName 或 token 文本 或 error 消息
      */
-    public void chatStream(String userMessage, String sessionId,
+    public void chatStream(String userMessage, String sessionId, String globalPrompt,
                             java.util.function.BiConsumer<String, String> onEvent) {
         boolean dbSessionExists = false;
         if (sessionId == null || sessionId.isBlank()) {
@@ -383,7 +383,7 @@ public class ChatService {
             System.out.println("[" + finalSessionId + "] 流式 → 「" + displayName + "」");
 
             String aiReply = callSingleModelStream(mc, conversationLog.toString(),
-                    buildSystemPrompt(mc, ragContext.toString(), enabledModels),
+                    buildSystemPrompt(mc, ragContext.toString(), enabledModels, globalPrompt),
                     token -> onEvent.accept("token", token),
                     finalSessionId, displayName);
 
@@ -719,10 +719,13 @@ public class ChatService {
     }
 
     private String buildSystemPrompt(ModelConfig model, String ragContext,
-                                       List<ModelConfig> allModels) {
+                                       List<ModelConfig> allModels, String globalPrompt) {
         String displayName = model.getDisplayName() != null && !model.getDisplayName().isBlank()
                 ? model.getDisplayName() : model.getModelName();
         StringBuilder sb = new StringBuilder();
+
+        // 0. 全局 Prompt（所有模型共享，最前面）
+        if (globalPrompt != null && !globalPrompt.isBlank()) sb.append(globalPrompt).append("\n\n");
 
         // 1. 模型自带的 Prompt
         if (model.getPrompt() != null && !model.getPrompt().isBlank()) sb.append(model.getPrompt());

@@ -128,9 +128,11 @@ const sendMessage = () => {
   isStreaming.value = true
 
   // 使用流式 SSE — 每个模型逐 token 输出
+  const globalPrompt = localStorage.getItem('myllm_global_prompt') || ''
   streamingAbort.value = sendChatMessageStream(
     text,
     sessionId.value || undefined,
+    globalPrompt || undefined,
     // onStartModel: 创建一条新的空 AI 气泡
     (displayName: string) => {
       messages.value.push({

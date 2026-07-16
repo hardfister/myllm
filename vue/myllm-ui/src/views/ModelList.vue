@@ -21,6 +21,13 @@ const useServer = () => isLoggedIn.value && !isOffline.value
 let localIdCounter = Date.now()
 const dragIndex = ref<number | null>(null)
 
+// 全局 Prompt
+const GLOBAL_PROMPT_KEY = 'myllm_global_prompt'
+const globalPrompt = ref(localStorage.getItem(GLOBAL_PROMPT_KEY) || '')
+const saveGlobalPrompt = () => {
+  localStorage.setItem(GLOBAL_PROMPT_KEY, globalPrompt.value)
+}
+
 const currentConfig = ref({
   id: 0 as number | undefined, modelName: 'deepseek-v4-flash', provider: 'DeepSeek',
   apiKeyEncrypted: '', baseUrl: 'https://api.deepseek.com/v1', maxTokens: 4096, prompt: '',
@@ -70,6 +77,13 @@ const getColor = (m: ModelConfig) => frontendMeta.value[m.id!]?.color || '#1e3a8
 <template>
   <div class="rag-container-glass">
     <div v-if="step === 'list'" class="list-layout">
+      <!-- 全局 Prompt -->
+      <div class="global-prompt-section">
+        <label>🌐 全局提示词（所有模型的最前方统一注入）：</label>
+        <textarea v-model="globalPrompt" rows="3" placeholder="如：你是MyLLM平台的AI助手，回答需简洁准确..."
+          @input="saveGlobalPrompt" class="global-prompt-input"></textarea>
+      </div>
+
       <div class="list-header">
         <span v-if="!useServer()" class="mode-badge">📱 本地模式</span>
         <span v-if="models.filter(m => m.isEnabled === 1).length > 1" class="multi-hint">🎯 {{ models.filter(m => m.isEnabled === 1).length }} 个模型已选</span>
@@ -114,4 +128,10 @@ const getColor = (m: ModelConfig) => frontendMeta.value[m.id!]?.color || '#1e3a8
 .card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .edit-btn { padding: 4px 8px; font-size: 12px; background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.08); border-radius: 6px; cursor: pointer; color: #475569; }
 .delete-btn { padding: 4px 8px; font-size: 12px; background: rgba(220,38,38,0.08); border: 1px solid rgba(220,38,38,0.15); border-radius: 6px; cursor: pointer; color: #dc2626; }
+
+/* 全局 Prompt */
+.global-prompt-section { margin-bottom: 8px; }
+.global-prompt-section label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 6px; }
+.global-prompt-input { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.6); font-size: 13px; resize: vertical; outline: none; box-sizing: border-box; color: #1e293b; }
+.global-prompt-input:focus { border-color: var(--theme-color, #1e3a8a); }
 </style>

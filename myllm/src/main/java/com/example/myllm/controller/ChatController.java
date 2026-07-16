@@ -40,7 +40,7 @@ public class ChatController {
         }
         System.out.println("[CHAT] 收到消息 | session=" + request.getSessionId()
                 + " | 内容=" + userMessage.substring(0, Math.min(50, userMessage.length())));
-        return chatService.chat(userMessage, request.getSessionId());
+        return chatService.chat(userMessage, request.getSessionId(), request.getGlobalPrompt());
     }
 
     /** 流式聊天 — SSE 格式，逐 token 推送 */
@@ -59,7 +59,7 @@ public class ChatController {
         response.setHeader("X-Accel-Buffering", "no");
         PrintWriter out = response.getWriter();
 
-        chatService.chatStream(userMessage, request.getSessionId(),
+        chatService.chatStream(userMessage, request.getSessionId(), request.getGlobalPrompt(),
                 (type, data) -> {
                     try {
                         out.write("event: " + type + "\ndata: " + data.replace("\n", "\\n") + "\n\n");

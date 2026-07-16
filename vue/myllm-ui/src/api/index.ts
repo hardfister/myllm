@@ -272,14 +272,15 @@ export function clearVectors(): Promise<{ data: { deleted: number; message: stri
 
 // ==================== 聊天 ====================
 
-export function sendChatMessage(content: string, sessionId?: string): Promise<{ data: ChatResponse }> {
-  return api.post('/api/chat', { content, sessionId })
+export function sendChatMessage(content: string, sessionId?: string, globalPrompt?: string): Promise<{ data: ChatResponse }> {
+  return api.post('/api/chat', { content, sessionId, globalPrompt })
 }
 
 /** SSE 流式聊天 — 返回 ReadableStream，逐 token 推送 */
 export function sendChatMessageStream(
   content: string,
   sessionId: string | undefined,
+  globalPrompt: string | undefined,
   onStartModel: (displayName: string) => void,
   onToken: (displayName: string, token: string) => void,
   onEndModel: (displayName: string) => void,
@@ -290,7 +291,7 @@ export function sendChatMessageStream(
   fetch('http://localhost:8080/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, sessionId }),
+    body: JSON.stringify({ content, sessionId, globalPrompt }),
     signal: controller.signal
   }).then(async (resp) => {
     if (!resp.ok || !resp.body) { onError('HTTP ' + resp.status); return }
